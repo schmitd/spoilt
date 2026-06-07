@@ -3,6 +3,7 @@
 
   const SETTINGS_KEY = "spoilt.settings";
   const STATUS_KEY = "spoilt.status";
+  const MEMORY_KEY = "spoilt.memory";
   const MASKED_TEXT_CLASS = "spoilt-redacted-text";
   const IMAGE_SHELL_CLASS = "spoilt-image-shell";
   const BACKGROUND_CLASS = "spoilt-background-redacted";
@@ -23,6 +24,10 @@
     useVision: true,
     scanText: true,
     scanImages: true,
+    memoryEnabled: true,
+    memoryRefreshHours: 12,
+    memoryMaxEntriesPerRule: 16,
+    memoryMaxImageExamplesPerRule: 8,
     strictness: "balanced",
     maxTextNodesPerScan: 700,
     maxImagesPerScan: 80,
@@ -37,6 +42,7 @@
   };
 
   let settings = DEFAULT_SETTINGS;
+  let spoilerMemory = typeof normalizeMemory === "function" ? normalizeMemory() : { entries: [], imageExamples: [] };
   let scanTimer = 0;
   let observer = null;
   let textSessionPromise = null;
@@ -50,6 +56,7 @@
 
   async function init() {
     settings = await loadSettings();
+    spoilerMemory = await loadMemory();
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       handleMessage(message).then(sendResponse).catch((error) => {
         sendResponse({ ok: false, error: String(error && error.message ? error.message : error) });
@@ -69,6 +76,11 @@
           updateStatus({ enabled: false, counters, pendingText: 0, pendingImages: 0 });
         }
       }
+      if (areaName === "local" && changes[MEMORY_KEY]) {
+        spoilerMemory = typeof normalizeMemory === "function" ? normalizeMemory(changes[MEMORY_KEY].newValue) : changes[MEMORY_KEY].newValue;
+        resetProcessedCaches();
+        scheduleScan();
+      }
     });
     if (settings.enabled) {
       startObserver();
@@ -80,6 +92,7 @@
     if (!message || message.scope !== "spoilt") return { ok: false, error: "Unknown message" };
     if (message.type === "scan") {
       settings = await loadSettings();
+      spoilerMemory = await loadMemory();
       await scanPage();
       return { ok: true, counters, status: await getStatus() };
     }
@@ -120,6 +133,9 @@
     next.strictness = ["loose", "balanced", "strict"].includes(next.strictness) ? next.strictness : "balanced";
     next.maxTextNodesPerScan = clampNumber(next.maxTextNodesPerScan, 50, 3000, 700);
     next.maxImagesPerScan = clampNumber(next.maxImagesPerScan, 10, 500, 80);
+    next.memoryRefreshHours = clampNumber(next.memoryRefreshHours, 1, 168, 12);
+    next.memoryMaxEntriesPerRule = clampNumber(next.memoryMaxEntriesPerRule, 4, 80, 16);
+    next.memoryMaxImageExamplesPerRule = clampNumber(next.memoryMaxImageExamplesPerRule, 2, 40, 8);
     return next;
   }
 
@@ -176,7 +192,7 @@
 
     const aiTextCandidates = [];
     for (const candidate of textCandidates) {
-      const match = keywordMatch(candidate.text, settings.rules);
+      const match = directKeywordMatch(candidate.text, settings.rules) || memoryLookup(candidate.text) || descriptionMatch(candidate.text);
       if (match) {
         redactTextNode(candidate.node, match);
       } else {
@@ -187,7 +203,7 @@
     const aiImageCandidates = [];
     for (const candidate of imageCandidates) {
       const metadataText = getImageMetadata(candidate.element);
-      const match = keywordMatch(metadataText, settings.rules);
+      const match = directKeywordMatch(metadataText, settings.rules) || memoryLookup(metadataText) || descriptionMatch(metadataText);
       if (match) {
         redactImage(candidate.element, match);
       } else {
@@ -349,7 +365,7 @@
 
   async function promptTextBatch(session, batch) {
     const payload = batch.map((candidate, i) => ({ i, text: candidate.text.slice(0, 600) }));
-    const prompt = `User blocking rules:\n${buildRulesSummary(settings.rules)}\n\nStrictness: ${strictnessGuidance(settings.strictness)}\n\nClassify each snippet. Return only JSON with shape {"decisions":[{"i":0,"block":false,"rule":"","reason":""}]}. Snippets:\n${JSON.stringify(payload)}`;
+    const prompt = `User blocking rules:\n${buildRulesSummary(settings.rules)}\n\nRecent spoiler intelligence:\n${buildFullMemorySummary() || "No recent memory yet."}\n\nStrictness: ${strictnessGuidance(settings.strictness)}\n\nClassify each snippet. Return only JSON with shape {"decisions":[{"i":0,"block":false,"rule":"","reason":""}]}. Snippets:\n${JSON.stringify(payload)}`;
     try {
       const result = await session.prompt(prompt, {
         responseConstraint: {
@@ -399,7 +415,11 @@
   }
 
   async function promptImage(session, element, metadataText) {
-    const promptElement = getPromptImageElement(element);
+    const promptElement = await getPromptImageInput(element);
+    if (!promptElement) {
+      await updateStatus({ aiVision: "metadata fallback", aiReason: "Image could not be safely loaded for local VLM; using metadata and memory fallback." });
+      return null;
+    }
     try {
       const result = await session.prompt([
         {
@@ -407,7 +427,7 @@
           content: [
             {
               type: "text",
-              value: `User blocking rules:\n${buildRulesSummary(settings.rules)}\n\nStrictness: ${strictnessGuidance(settings.strictness)}\n\nMetadata from title/alt/nearby text: ${metadataText || "none"}\n\nShould this image be blacked out? Return only JSON {"block":boolean,"rule":"","reason":""}.`
+              value: `User blocking rules:\n${buildRulesSummary(settings.rules)}\n\nRecent spoiler intelligence and image examples:\n${buildFullMemorySummary() || "No recent memory yet."}\n\nStrictness: ${strictnessGuidance(settings.strictness)}\n\nMetadata from title/alt/nearby text: ${metadataText || "none"}\n\nShould this image be blacked out? Return only JSON {"block":boolean,"rule":"","reason":""}.`
             },
             { type: "image", value: promptElement }
           ]
@@ -425,7 +445,14 @@
       });
       return parseJSONResult(result);
     } catch (error) {
-      await updateStatus({ lastError: `Image AI unavailable; using metadata fallback: ${formatError(error)}` });
+      const errorText = formatError(error);
+      const isTaint = errorText.includes("SecurityError") || errorText.includes("taint");
+      await updateStatus({
+        aiVision: "metadata fallback",
+        aiReason: isTaint
+          ? "Cross-origin image was unsafe for local VLM; using metadata and memory fallback."
+          : `Image AI unavailable; using metadata fallback: ${errorText}`
+      });
       return null;
     }
   }
@@ -522,6 +549,10 @@
   }
 
   function keywordMatch(text, rules) {
+    return directKeywordMatch(text, rules) || descriptionMatch(text);
+  }
+
+  function directKeywordMatch(text, rules) {
     const source = normalizeComparableText(text);
     if (!source) return null;
     for (const rule of rules || []) {
@@ -531,10 +562,30 @@
           return { ruleId: rule.id, ruleName: rule.name, reason: `keyword: ${keyword}` };
         }
       }
-      const descriptionMatch = descriptionFallbackMatch(source, rule);
-      if (descriptionMatch) return descriptionMatch;
     }
     return null;
+  }
+
+  function descriptionMatch(text) {
+    const source = normalizeComparableText(text);
+    if (!source) return null;
+    for (const rule of settings.rules || []) {
+      const match = descriptionFallbackMatch(source, rule);
+      if (match) return match;
+    }
+    return null;
+  }
+
+  function memoryLookup(text) {
+    return typeof memoryMatch === "function" ? memoryMatch(text, settings.rules, spoilerMemory) : null;
+  }
+
+  function buildFullMemorySummary() {
+    if (typeof buildMemoryContext !== "function") return "";
+    return (settings.rules || []).map((rule) => {
+      const context = buildMemoryContext(spoilerMemory, rule.id, 5);
+      return context ? `${rule.name}:\n${context}` : "";
+    }).filter(Boolean).join("\n");
   }
 
   function descriptionFallbackMatch(source, rule) {
@@ -582,6 +633,8 @@
       settings.useVision,
       settings.scanText,
       settings.scanImages,
+      settings.memoryEnabled,
+      spoilerMemory.lastUpdatedAt || "",
       rulesSignature
     ].join("::");
   }
@@ -605,6 +658,33 @@
       return element.querySelector("img") || element;
     }
     return element;
+  }
+
+  async function getPromptImageInput(element) {
+    const imageElement = getPromptImageElement(element);
+    const source = imageElement.currentSrc || imageElement.src || imageElement.getAttribute("href") || "";
+    if (!source) return imageElement;
+    if (/^data:/i.test(source)) return dataUrlToBlob(source);
+    if (/^blob:/i.test(source) || isSameOriginUrl(source)) return imageElement;
+    try {
+      const response = await chrome.runtime.sendMessage({ scope: "spoilt", type: "fetchImageDataUrl", url: source });
+      if (!response || !response.ok || !response.result || !response.result.dataUrl) return null;
+      return dataUrlToBlob(response.result.dataUrl);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async function dataUrlToBlob(dataUrl) {
+    return fetch(dataUrl).then((response) => response.blob());
+  }
+
+  function isSameOriginUrl(url) {
+    try {
+      return new URL(url, location.href).origin === location.origin;
+    } catch (_error) {
+      return false;
+    }
   }
 
   function nearestCaptionText(element) {
@@ -672,5 +752,10 @@
   async function getStatus() {
     const result = await chrome.storage.local.get(STATUS_KEY);
     return result[STATUS_KEY] || {};
+  }
+
+  async function loadMemory() {
+    const result = await chrome.storage.local.get(MEMORY_KEY);
+    return typeof normalizeMemory === "function" ? normalizeMemory(result[MEMORY_KEY]) : (result[MEMORY_KEY] || { entries: [], imageExamples: [] });
   }
 })();

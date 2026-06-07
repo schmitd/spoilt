@@ -69,20 +69,33 @@ def eval_js(ws, expression, await_promise=False):
     return result.get("result", {}).get("value")
 
 
-def inject_extension_stubs(ws, settings, language_model_mock=""):
+def inject_extension_stubs(ws, settings, language_model_mock="", local_store=None):
+    local_store = local_store or {}
     stub = f"""
       window.__spoiltSettings = {json.dumps(settings)};
+      window.__spoiltLocalStore = {json.dumps(local_store)};
       window.__spoiltStorageListeners = [];
       window.chrome = {{
-        runtime: {{ onMessage: {{ addListener(listener) {{ window.__spoiltMessageListener = listener; }} }} }},
+        runtime: {{
+          onMessage: {{ addListener(listener) {{ window.__spoiltMessageListener = listener; }} }},
+          async sendMessage(message) {{
+            if (message && message.type === "fetchImageDataUrl") {{
+              return {{ ok: false, error: "mock fetch unavailable" }};
+            }}
+            return {{ ok: true }};
+          }}
+        }},
         storage: {{
           sync: {{
             async get(key) {{ return {{ [key]: window.__spoiltSettings }}; }},
             async set(_value) {{}}
           }},
           local: {{
-            _store: {{}},
-            async get(key) {{ return {{ [key]: this._store[key] }}; }},
+            _store: window.__spoiltLocalStore,
+            async get(key) {{
+              if (Array.isArray(key)) return Object.fromEntries(key.map((item) => [item, this._store[item]]));
+              return {{ [key]: this._store[key] }};
+            }},
             async set(value) {{ Object.assign(this._store, value); }}
           }},
           onChanged: {{ addListener(listener) {{ window.__spoiltStorageListeners.push(listener); }} }}
@@ -100,8 +113,9 @@ def inject_extension_stubs(ws, settings, language_model_mock=""):
     eval_js(ws, stub)
     css = (ROOT / "src/content.css").read_text(encoding="utf-8")
     eval_js(ws, "const style = document.createElement('style'); style.textContent = " + json.dumps(css) + "; document.head.appendChild(style);")
-    script = (ROOT / "src/content.js").read_text(encoding="utf-8")
-    eval_js(ws, script)
+    for script_name in ["src/shared.js", "src/memory.js", "src/content.js"]:
+        script = (ROOT / script_name).read_text(encoding="utf-8")
+        eval_js(ws, script)
 
 
 def main():

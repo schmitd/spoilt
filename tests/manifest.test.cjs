@@ -7,14 +7,21 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'u
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.minimum_chrome_version, '138');
+assert.deepEqual(manifest.background, { service_worker: 'src/background.js' });
+assert.ok(manifest.content_scripts[0].js.includes('src/shared.js'));
+assert.ok(manifest.content_scripts[0].js.includes('src/memory.js'));
 assert.ok(manifest.content_scripts[0].js.includes('src/content.js'));
 assert.ok(manifest.permissions.includes('storage'));
 assert.ok(manifest.permissions.includes('activeTab'));
+assert.ok(manifest.permissions.includes('alarms'));
 assert.equal(manifest.permissions.includes('scripting'), false);
 assert.ok(manifest.host_permissions.includes('<all_urls>'));
 
 for (const relative of [
+  'src/background.js',
   'src/content.js',
+  'src/memory.js',
+  'src/shared.js',
   'src/content.css',
   'src/popup.html',
   'src/options.html',

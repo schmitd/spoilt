@@ -15,10 +15,12 @@ async function init() {
   enabledEl.checked = Boolean(settings.enabled);
   enabledEl.addEventListener("change", toggleEnabled);
   document.querySelector("#prepare-ai").addEventListener("click", prepareLocalAI);
+  document.querySelector("#refresh-memory").addEventListener("click", refreshMemory);
   document.querySelector("#rescan").addEventListener("click", () => sendToActiveTab({ type: "scan" }));
   document.querySelector("#clear").addEventListener("click", () => sendToActiveTab({ type: "clear" }));
   document.querySelector("#options").addEventListener("click", () => chrome.runtime.openOptionsPage());
   await refreshStatus();
+  await refreshMemoryStatus();
 }
 
 async function loadSettings() {
@@ -94,6 +96,30 @@ async function prepareLocalAI() {
   await refreshStatus();
 }
 
+async function refreshMemory() {
+  clearError();
+  await updateStatus({ aiReason: "Refreshing spoiler memory from recent web results." });
+  await refreshStatus();
+  try {
+    const response = await chrome.runtime.sendMessage({ scope: "spoilt", type: "refreshMemory" });
+    if (!response || !response.ok) throw new Error(response && response.error ? response.error : "Memory refresh failed");
+    await updateStatus({ aiReason: "Spoiler memory refreshed." });
+    await refreshMemoryStatus();
+    await sendToActiveTab({ type: "scan" });
+  } catch (error) {
+    showError(formatError(error));
+  }
+}
+
+async function refreshMemoryStatus() {
+  try {
+    const response = await chrome.runtime.sendMessage({ scope: "spoilt", type: "memoryStatus" });
+    if (response && response.ok) renderMemoryStatus(response.memory);
+  } catch (_error) {
+    renderMemoryStatus({});
+  }
+}
+
 async function prepareSession({ label, statusKey, fallbackStatus = "unavailable", options }) {
   try {
     const availability = await LanguageModel.availability(options);
@@ -158,6 +184,7 @@ function renderStatus(status) {
   document.querySelector("#image-count").textContent = String(counters.images || 0);
   document.querySelector("#ai-text").textContent = status.aiText || "unknown";
   document.querySelector("#ai-vision").textContent = status.aiVision || "fallback";
+  if (status.memory) renderMemoryStatus(status.memory);
   if (status.aiReason) {
     aiReasonEl.hidden = false;
     aiReasonEl.textContent = status.aiReason;
@@ -170,6 +197,12 @@ function renderStatus(status) {
   } else {
     clearError();
   }
+}
+
+function renderMemoryStatus(memory) {
+  const count = Number(memory && memory.entryCount || 0) + Number(memory && memory.imageExampleCount || 0);
+  document.querySelector("#memory-count").textContent = String(count);
+  document.querySelector("#memory-last").textContent = memory && memory.lastUpdatedAt ? shortDate(memory.lastUpdatedAt) : "never";
 }
 
 function showError(message) {
@@ -189,4 +222,12 @@ function capitalize(value) {
 function formatError(error) {
   if (!error) return "Unknown error.";
   return error.name ? `${error.name}: ${error.message || ""}`.trim() : String(error);
+}
+
+function shortDate(value) {
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric" }).format(new Date(value));
+  } catch (_error) {
+    return "recently";
+  }
 }

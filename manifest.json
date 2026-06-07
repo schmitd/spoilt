@@ -2,11 +2,12 @@
   "manifest_version": 3,
   "name": "Spoilt",
   "description": "Black out user-configured spoilers and unwanted content using Chrome's local inference APIs when available.",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "minimum_chrome_version": "138",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -28,12 +29,17 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
+  "background": {
+    "service_worker": "src/background.js"
+  },
   "content_scripts": [
     {
       "matches": [
         "<all_urls>"
       ],
       "js": [
+        "src/shared.js",
+        "src/memory.js",
         "src/content.js"
       ],
       "css": [

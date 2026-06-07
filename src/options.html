@@ -36,6 +36,10 @@
           <input id="useVision" type="checkbox">
           <span>Use local image understanding when available</span>
         </label>
+        <label class="switch-row">
+          <input id="memoryEnabled" type="checkbox">
+          <span>Refresh spoiler memory from web search</span>
+        </label>
       </div>
 
       <label class="field">
@@ -46,6 +50,29 @@
           <option value="strict">Strict: block only specific matches</option>
         </select>
       </label>
+
+      <section class="memory-panel" aria-labelledby="memory-title">
+        <div>
+          <p class="eyebrow small">Memory loop</p>
+          <h2 id="memory-title">Stay ahead of new spoilers</h2>
+          <p class="muted">Spoilt searches periodically for each rule, stores recent spoiler details, and adds labeled image examples to the local prompt context.</p>
+        </div>
+        <div class="memory-grid">
+          <label class="field">
+            <span>Refresh cadence (hours)</span>
+            <input id="memoryRefreshHours" type="number" min="1" max="168" step="1">
+          </label>
+          <label class="field">
+            <span>Details per rule</span>
+            <input id="memoryMaxEntriesPerRule" type="number" min="4" max="80" step="1">
+          </label>
+          <label class="field">
+            <span>Image examples per rule</span>
+            <input id="memoryMaxImageExamplesPerRule" type="number" min="2" max="40" step="1">
+          </label>
+        </div>
+        <p id="memory-status" class="muted"></p>
+      </section>
 
       <div class="section-title">
         <h2>Rules</h2>

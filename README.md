@@ -1,22 +1,31 @@
 # Spoilt
 
-Spoilt is a Chrome extension that blacks out user-configured spoilers or unwanted content before you read it. It uses Chrome's local `LanguageModel` Prompt API when available and falls back to local keyword, title, and alt-text matching when the model or image modality is unavailable.
+Spoilt is a Chrome extension that blacks out user-configured spoilers or unwanted content before you read it. It combines immediate deterministic matching, local Chrome AI when available, and a periodic spoiler-memory loop that searches for fresh details about each configured subject.
+
+## Product Identity
+
+Spoilt now uses a **redaction bureau** identity: stark ink surfaces, dossier-yellow status signals, hard-edged controls, and editorial typography. The interface is intentionally more like an intelligence desk than a generic settings panel because the product promise is vigilance.
+
+The Impeccable-derived design skills (`bolder`, `distill`, `polish`, plus companion critique/delight/quieter skills) were installed locally from `irastorzatobias/design-skills`. Restart Codex to make them auto-trigger in future turns.
 
 ## What It Does
 
 - Lets users define blocking rules with a name, description, and keywords.
 - Masks matching text with blacked-out spans.
 - Masks matching images with black placeholder shells.
-- Uses Chrome local inference for semantic text classification when `LanguageModel` is already available.
-- Provides a **Prepare local AI** popup action to trigger Chrome model download/preparation from a user gesture.
-- Uses rule names/descriptions as a conservative fallback when the local model is unavailable, so description-only rules can still catch direct terms.
-- Uses Chrome local image input when available; otherwise it checks image `alt`, `title`, ARIA label, caption, poster URL, and source metadata.
-- Sends no page content to a remote server. AI checks run through Chrome's on-device model APIs.
+- Searches roughly every 12 hours for each rule and stores fresh spoiler details in local extension memory.
+- Stores labeled image examples as metadata, including why each image is likely a spoiler.
+- Adds memory details and image examples to local AI prompts as few-shot context.
+- Uses Chrome local inference for semantic text/image classification when `LanguageModel` is already available.
+- Uses a **Prepare local AI** popup action to trigger model download/preparation from a user gesture.
+- Uses rule names/descriptions and memory terms as conservative fallbacks when local AI is unavailable.
+- Avoids Google Images/cross-origin taint failures by fetching remote image bytes through the extension service worker and passing `Blob` inputs to the local VLM when possible.
+- Sends no page content to a remote server. Periodic memory refresh uses public web/news search results for the configured subjects and stores summaries locally.
 
 ## Requirements
 
 - Chrome 138 or newer for text Prompt API support.
-- Image understanding depends on the Chrome version/channel and device support for Prompt API image input.
+- Image understanding depends on Chrome version/channel and device support for Prompt API image input.
 - Gemini Nano may need to download on first use. Chrome's documentation says the initial model download needs an unmetered connection, and subsequent use does not send data to Google or third parties.
 
 ## Install Locally
@@ -25,13 +34,14 @@ Spoilt is a Chrome extension that blacks out user-configured spoilers or unwante
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
 4. Select this repository folder.
-5. Open the Spoilt options page and configure your rules.
+5. Open Spoilt options and configure your rules.
+6. Click the Spoilt toolbar icon and choose **Prepare local AI** if you want semantic local AI/VLM support.
 
 ## Usage
 
-- Click the toolbar icon to enable or disable protection, prepare local AI, rescan the current tab, or open options.
-- Click **Prepare local AI** after install or Chrome updates if text AI or vision status is `downloadable`, `downloading`, or unavailable.
-- Add specific rules. Good rule descriptions include what to block and what not to block.
+- Click the toolbar icon to enable or disable protection, prepare local AI, refresh memory, rescan the current tab, or open options.
+- Keep memory refresh enabled for subjects where new details appear over time, such as active TV seasons, sports, elections, or game releases.
+- Add specific rules. Good descriptions include what to block and what not to block.
 - Add direct keywords for immediate masking even when Chrome local AI is unavailable.
 
 Example rules:
@@ -42,32 +52,44 @@ Example rules:
 
 ## Development
 
-This project has no runtime dependencies. If Node is installed:
+This project has no runtime dependencies. The full test suite uses Node plus Python and Chrome:
 
 ```bash
 npm test
+```
+
+Useful targets:
+
+```bash
+npm run test:unit
+npm run test:e2e
+npm run test:adversarial
+npm run test:wild -- --url "https://news.google.com/search?q=movie%20spoiler"
 ```
 
 In this Windows/WSL workspace, Node may be available at:
 
 ```bash
 "/mnt/c/Program Files/nodejs/node.exe" tests/shared.test.cjs
+"/mnt/c/Program Files/nodejs/node.exe" tests/memory.test.cjs
 "/mnt/c/Program Files/nodejs/node.exe" tests/manifest.test.cjs
 ```
 
 Package a zip:
 
 ```bash
-zip -r spoilt-extension.zip manifest.json src icons README.md LICENSE
+zip -r spoilt-extension.zip manifest.json src icons README.md LICENSE docs
 ```
+
+See [docs/TESTING.md](docs/TESTING.md) for the harness strategy.
 
 ## Privacy
 
-Spoilt stores settings in `chrome.storage.sync` and per-tab status in `chrome.storage.local`. It does not include analytics, network calls, remote APIs, or external dependencies.
+Spoilt stores settings in `chrome.storage.sync` and operational memory/status in `chrome.storage.local`. It does not include analytics or a remote service. The memory loop fetches public search/news result pages for configured subjects; disable **Refresh spoiler memory from web search** if you want no periodic web lookups.
 
 ## Release Notes
 
-`1.0.2` fixes local-AI lifecycle issues: passive page scans no longer start model downloads, the popup can prepare local AI from a user gesture, description-only rules get fallback matching, and CI covers semantic AI masking with a mocked Prompt API. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
+`1.1.0` adds periodic spoiler memory, labeled image examples, safer VLM image loading, a redesigned redaction-bureau UI, and deterministic adversarial/wild test harnesses. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
 
 ## License
 

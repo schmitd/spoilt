@@ -4,6 +4,10 @@ const DEFAULT_SETTINGS = {
   useVision: true,
   scanText: true,
   scanImages: true,
+  memoryEnabled: true,
+  memoryRefreshHours: 12,
+  memoryMaxEntriesPerRule: 16,
+  memoryMaxImageExamplesPerRule: 8,
   strictness: "balanced",
   maxTextNodesPerScan: 700,
   maxImagesPerScan: 80,
@@ -34,6 +38,9 @@ function normalizeSettings(value) {
     : DEFAULT_SETTINGS.strictness;
   settings.maxTextNodesPerScan = clampNumber(settings.maxTextNodesPerScan, 50, 3000, 700);
   settings.maxImagesPerScan = clampNumber(settings.maxImagesPerScan, 10, 500, 80);
+  settings.memoryRefreshHours = clampNumber(settings.memoryRefreshHours, 1, 168, 12);
+  settings.memoryMaxEntriesPerRule = clampNumber(settings.memoryMaxEntriesPerRule, 4, 80, 16);
+  settings.memoryMaxImageExamplesPerRule = clampNumber(settings.memoryMaxImageExamplesPerRule, 2, 40, 8);
   return settings;
 }
 

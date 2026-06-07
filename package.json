@@ -1,12 +1,16 @@
 {
   "name": "spoilt",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Chrome extension that blacks out user-configured spoilers and unwanted content using Chrome local inference APIs when available.",
   "license": "MIT",
   "type": "commonjs",
   "scripts": {
-    "test": "node tests/shared.test.cjs && node tests/manifest.test.cjs",
-    "package": "zip -r spoilt-extension.zip manifest.json src icons README.md LICENSE -x '*.DS_Store'"
+    "test": "npm run test:unit && npm run test:e2e && npm run test:adversarial",
+    "test:unit": "node tests/shared.test.cjs && node tests/memory.test.cjs && node tests/manifest.test.cjs",
+    "test:e2e": "python3 tests/e2e_chrome.py",
+    "test:adversarial": "python3 tests/adversarial_harness.py",
+    "test:wild": "python3 tests/wild_harness.py",
+    "package": "zip -r spoilt-extension.zip manifest.json src icons README.md LICENSE docs -x \"*.DS_Store\""
   },
   "keywords": [
     "chrome-extension",

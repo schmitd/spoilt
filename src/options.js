@@ -26,13 +26,17 @@ async function loadSettings() {
 
 function renderSettings(next) {
   settings = normalizeSettings(next);
-  for (const key of ["enabled", "useLocalAI", "useVision", "scanText", "scanImages"]) {
+  for (const key of ["enabled", "useLocalAI", "useVision", "scanText", "scanImages", "memoryEnabled"]) {
     document.querySelector(`#${key}`).checked = Boolean(settings[key]);
   }
   document.querySelector("#strictness").value = settings.strictness;
+  document.querySelector("#memoryRefreshHours").value = settings.memoryRefreshHours;
+  document.querySelector("#memoryMaxEntriesPerRule").value = settings.memoryMaxEntriesPerRule;
+  document.querySelector("#memoryMaxImageExamplesPerRule").value = settings.memoryMaxImageExamplesPerRule;
   rulesRoot.textContent = "";
   for (const rule of settings.rules) addRuleCard(rule);
   statusEl.textContent = "";
+  refreshMemoryStatus();
 }
 
 function addRuleCard(rule) {
@@ -55,7 +59,11 @@ async function saveSettings(event) {
     useVision: document.querySelector("#useVision").checked,
     scanText: document.querySelector("#scanText").checked,
     scanImages: document.querySelector("#scanImages").checked,
+    memoryEnabled: document.querySelector("#memoryEnabled").checked,
     strictness: document.querySelector("#strictness").value,
+    memoryRefreshHours: document.querySelector("#memoryRefreshHours").value,
+    memoryMaxEntriesPerRule: document.querySelector("#memoryMaxEntriesPerRule").value,
+    memoryMaxImageExamplesPerRule: document.querySelector("#memoryMaxImageExamplesPerRule").value,
     maxTextNodesPerScan: settings.maxTextNodesPerScan,
     maxImagesPerScan: settings.maxImagesPerScan,
     rules: Array.from(rulesRoot.querySelectorAll(".rule-card")).map((card, index) => ({
@@ -69,4 +77,21 @@ async function saveSettings(event) {
   settings = next;
   statusEl.textContent = "Saved. Existing tabs update on the next scan or reload.";
   setTimeout(() => { statusEl.textContent = ""; }, 4000);
+}
+
+async function refreshMemoryStatus() {
+  const status = document.querySelector("#memory-status");
+  if (!status) return;
+  try {
+    const response = await chrome.runtime.sendMessage({ scope: "spoilt", type: "memoryStatus" });
+    if (!response || !response.ok) {
+      status.textContent = "Memory status is not available yet.";
+      return;
+    }
+    const memory = response.memory;
+    const last = memory.lastUpdatedAt ? new Date(memory.lastUpdatedAt).toLocaleString() : "never";
+    status.textContent = `${memory.entryCount} details and ${memory.imageExampleCount} image examples stored. Last refresh: ${last}.`;
+  } catch (_error) {
+    status.textContent = "Memory status appears after the extension service worker starts.";
+  }
 }
