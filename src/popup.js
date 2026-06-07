@@ -1,8 +1,10 @@
 const SETTINGS_KEY = "spoilt.settings";
 const STATUS_KEY = "spoilt.status";
+const MODEL_PREPARE_TIMEOUT_MS = 120000;
 
 const enabledEl = document.querySelector("#enabled");
 const errorEl = document.querySelector("#last-error");
+const aiReasonEl = document.querySelector("#ai-reason");
 
 let settings = DEFAULT_SETTINGS;
 
@@ -12,6 +14,7 @@ async function init() {
   settings = await loadSettings();
   enabledEl.checked = Boolean(settings.enabled);
   enabledEl.addEventListener("change", toggleEnabled);
+  document.querySelector("#prepare-ai").addEventListener("click", prepareLocalAI);
   document.querySelector("#rescan").addEventListener("click", () => sendToActiveTab({ type: "scan" }));
   document.querySelector("#clear").addEventListener("click", () => sendToActiveTab({ type: "clear" }));
   document.querySelector("#options").addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -47,12 +50,121 @@ async function sendToActiveTab(message) {
   }
 }
 
+async function prepareLocalAI() {
+  clearError();
+  await updateStatus({ aiText: "checking", aiVision: settings.useVision ? "checking" : "fallback", aiReason: "Checking Chrome local AI support." });
+  renderStatus((await chrome.storage.local.get(STATUS_KEY))[STATUS_KEY] || {});
+  if (typeof LanguageModel === "undefined") {
+    await updateStatus({
+      aiText: "unavailable",
+      aiVision: "fallback",
+      aiReason: "LanguageModel is not exposed in this Chrome version/profile. Check Chrome 138+ and chrome://flags for Prompt API support."
+    });
+    await refreshStatus();
+    return;
+  }
+
+  const textPrepared = await prepareSession({
+    label: "text",
+    statusKey: "aiText",
+    options: {
+      expectedInputs: [{ type: "text", languages: ["en"] }],
+      expectedOutputs: [{ type: "text", languages: ["en"] }],
+      initialPrompts: [{ role: "system", content: "You classify text against user-defined content blocking rules." }]
+    }
+  });
+
+  if (settings.useVision) {
+    await prepareSession({
+      label: "vision",
+      statusKey: "aiVision",
+      fallbackStatus: "fallback",
+      options: {
+        expectedInputs: [{ type: "text", languages: ["en"] }, { type: "image" }],
+        expectedOutputs: [{ type: "text", languages: ["en"] }],
+        initialPrompts: [{ role: "system", content: "You classify images against user-defined content blocking rules." }]
+      }
+    });
+  } else {
+    await updateStatus({ aiVision: "fallback" });
+  }
+
+  await sendToActiveTab({ type: "resetAI" });
+  if (textPrepared) await sendToActiveTab({ type: "scan" });
+  await refreshStatus();
+}
+
+async function prepareSession({ label, statusKey, fallbackStatus = "unavailable", options }) {
+  try {
+    const availability = await LanguageModel.availability(options);
+    await updateStatus({ [statusKey]: availability, aiReason: `${capitalize(label)} model availability: ${availability}.` });
+    if (availability === "unavailable") {
+      await updateStatus({
+        [statusKey]: fallbackStatus,
+        aiReason: label === "vision"
+          ? "Vision model is unavailable; Spoilt will use title, alt text, captions, and source metadata."
+          : "Text model is unavailable; Spoilt will use keywords and description fallback terms."
+      });
+      return false;
+    }
+
+    const session = await withTimeout(LanguageModel.create({
+      ...options,
+      monitor(monitor) {
+        monitor.addEventListener("downloadprogress", (event) => {
+          updateStatus({
+            [statusKey]: "downloading",
+            aiDownload: event.loaded,
+            aiReason: `Downloading ${label} model: ${Math.round(Number(event.loaded || 0) * 100)}%.`
+          });
+        });
+      }
+    }), MODEL_PREPARE_TIMEOUT_MS, `${capitalize(label)} model preparation timed out.`);
+
+    if (session && session.destroy) session.destroy();
+    await updateStatus({ [statusKey]: "available", aiReason: `${capitalize(label)} model is ready.` });
+    return true;
+  } catch (error) {
+    await updateStatus({
+      [statusKey]: fallbackStatus,
+      aiReason: `${capitalize(label)} model could not be prepared. ${formatError(error)}`
+    });
+    return false;
+  }
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId = 0;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
+async function updateStatus(patch) {
+  const result = await chrome.storage.local.get(STATUS_KEY);
+  await chrome.storage.local.set({
+    [STATUS_KEY]: {
+      ...(result[STATUS_KEY] || {}),
+      ...patch,
+      updatedAt: new Date().toISOString()
+    }
+  });
+}
+
 function renderStatus(status) {
   const counters = status.counters || {};
   document.querySelector("#text-count").textContent = String(counters.text || 0);
   document.querySelector("#image-count").textContent = String(counters.images || 0);
   document.querySelector("#ai-text").textContent = status.aiText || "unknown";
   document.querySelector("#ai-vision").textContent = status.aiVision || "fallback";
+  if (status.aiReason) {
+    aiReasonEl.hidden = false;
+    aiReasonEl.textContent = status.aiReason;
+  } else {
+    aiReasonEl.hidden = true;
+    aiReasonEl.textContent = "";
+  }
   if (status.lastError) {
     showError(status.lastError);
   } else {
@@ -68,4 +180,13 @@ function showError(message) {
 function clearError() {
   errorEl.hidden = true;
   errorEl.textContent = "";
+}
+
+function capitalize(value) {
+  return String(value || "").charAt(0).toUpperCase() + String(value || "").slice(1);
+}
+
+function formatError(error) {
+  if (!error) return "Unknown error.";
+  return error.name ? `${error.name}: ${error.message || ""}`.trim() : String(error);
 }

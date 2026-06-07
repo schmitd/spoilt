@@ -69,6 +69,41 @@ def eval_js(ws, expression, await_promise=False):
     return result.get("result", {}).get("value")
 
 
+def inject_extension_stubs(ws, settings, language_model_mock=""):
+    stub = f"""
+      window.__spoiltSettings = {json.dumps(settings)};
+      window.__spoiltStorageListeners = [];
+      window.chrome = {{
+        runtime: {{ onMessage: {{ addListener(listener) {{ window.__spoiltMessageListener = listener; }} }} }},
+        storage: {{
+          sync: {{
+            async get(key) {{ return {{ [key]: window.__spoiltSettings }}; }},
+            async set(_value) {{}}
+          }},
+          local: {{
+            _store: {{}},
+            async get(key) {{ return {{ [key]: this._store[key] }}; }},
+            async set(value) {{ Object.assign(this._store, value); }}
+          }},
+          onChanged: {{ addListener(listener) {{ window.__spoiltStorageListeners.push(listener); }} }}
+        }}
+      }};
+      window.__spoiltSetSettings = (nextSettings) => {{
+        const oldValue = window.__spoiltSettings;
+        window.__spoiltSettings = nextSettings;
+        for (const listener of window.__spoiltStorageListeners) {{
+          listener({{ "spoilt.settings": {{ oldValue, newValue: nextSettings }} }}, "sync");
+        }}
+      }};
+      {language_model_mock}
+    """
+    eval_js(ws, stub)
+    css = (ROOT / "src/content.css").read_text(encoding="utf-8")
+    eval_js(ws, "const style = document.createElement('style'); style.textContent = " + json.dumps(css) + "; document.head.appendChild(style);")
+    script = (ROOT / "src/content.js").read_text(encoding="utf-8")
+    eval_js(ws, script)
+
+
 def main():
     os.chdir(ROOT)
     server = socketserver.TCPServer(("127.0.0.1", PORT), QuietHandler)
@@ -109,37 +144,7 @@ def main():
                 "keywords": ["spoiler", "ending", "death", "finale", "leak"],
             }],
         }
-        stub = f"""
-          window.__spoiltSettings = {json.dumps(settings)};
-          window.__spoiltStorageListeners = [];
-          window.chrome = {{
-            runtime: {{ onMessage: {{ addListener(listener) {{ window.__spoiltMessageListener = listener; }} }} }},
-            storage: {{
-              sync: {{
-                async get(key) {{ return {{ [key]: window.__spoiltSettings }}; }},
-                async set(_value) {{}}
-              }},
-              local: {{
-                _store: {{}},
-                async get(key) {{ return {{ [key]: this._store[key] }}; }},
-                async set(value) {{ Object.assign(this._store, value); }}
-              }},
-              onChanged: {{ addListener(listener) {{ window.__spoiltStorageListeners.push(listener); }} }}
-            }}
-          }};
-          window.__spoiltSetSettings = (nextSettings) => {{
-            const oldValue = window.__spoiltSettings;
-            window.__spoiltSettings = nextSettings;
-            for (const listener of window.__spoiltStorageListeners) {{
-              listener({{ "spoilt.settings": {{ oldValue, newValue: nextSettings }} }}, "sync");
-            }}
-          }};
-        """
-        eval_js(ws, stub)
-        css = (ROOT / "src/content.css").read_text(encoding="utf-8")
-        eval_js(ws, "const style = document.createElement('style'); style.textContent = " + json.dumps(css) + "; document.head.appendChild(style);")
-        script = (ROOT / "src/content.js").read_text(encoding="utf-8")
-        eval_js(ws, script)
+        inject_extension_stubs(ws, settings)
         time.sleep(2.2)
         counts = eval_js(ws, "({ text: document.querySelectorAll('.spoilt-redacted-text').length, images: document.querySelectorAll('.spoilt-image-shell').length, safeReadable: document.body.textContent.includes('This paragraph is safe') })")
         if counts["text"] < 2 or counts["images"] < 1 or not counts["safeReadable"]:
@@ -166,7 +171,50 @@ def main():
         if disabled_counts["text"] != 0 or disabled_counts["images"] != 0 or not disabled_counts["safeReadable"] or not disabled_counts["spoilerReadable"]:
             raise AssertionError(f"Disable unmask failed: {disabled_counts}")
 
-        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts}")
+        cdp(ws, "Page.navigate", {"url": URL})
+        time.sleep(0.8)
+        semantic_settings = {
+            "enabled": True,
+            "useLocalAI": True,
+            "useVision": False,
+            "scanText": True,
+            "scanImages": False,
+            "strictness": "balanced",
+            "rules": [{
+                "id": "semantic-plot",
+                "name": "Plot outcome",
+                "description": "Block sentences that reveal the detective was the ghost.",
+                "keywords": [],
+            }],
+        }
+        language_model_mock = """
+          window.LanguageModel = {
+            async availability() { return "available"; },
+            async create() {
+              return {
+                async prompt(promptText) {
+                  const snippets = JSON.parse(promptText.match(/Snippets:\\n([\\s\\S]*)$/)[1]);
+                  return JSON.stringify({
+                    decisions: snippets.map((snippet) => ({
+                      i: snippet.i,
+                      block: snippet.text.includes("detective was the ghost"),
+                      rule: "Plot outcome",
+                      reason: "mock semantic description match"
+                    }))
+                  });
+                },
+                destroy() {}
+              };
+            }
+          };
+        """
+        inject_extension_stubs(ws, semantic_settings, language_model_mock)
+        time.sleep(1.2)
+        semantic_counts = eval_js(ws, "({ text: document.querySelectorAll('.spoilt-redacted-text').length, semanticMasked: Array.from(document.querySelectorAll('.spoilt-redacted-text')).some((node) => node.textContent.includes('detective was the ghost')) })")
+        if semantic_counts["text"] < 1 or not semantic_counts["semanticMasked"]:
+            raise AssertionError(f"Description-only semantic AI masking failed: {semantic_counts}")
+
+        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts} semantic={semantic_counts}")
     finally:
         try:
             chrome.terminate()

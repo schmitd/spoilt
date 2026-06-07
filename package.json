@@ -1,6 +1,6 @@
 {
   "name": "spoilt",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Chrome extension that blacks out user-configured spoilers and unwanted content using Chrome local inference APIs when available.",
   "license": "MIT",
   "type": "commonjs",

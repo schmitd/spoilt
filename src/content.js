@@ -9,6 +9,13 @@
   const SCAN_DEBOUNCE_MS = 900;
   const AI_TEXT_BATCH_SIZE = 18;
   const AI_IMAGE_LIMIT_PER_SCAN = 12;
+  const MIN_FALLBACK_TERM_LENGTH = 4;
+  const FALLBACK_STOP_WORDS = new Set([
+    "about", "after", "also", "and", "are", "avoid", "block", "but", "can", "content", "details",
+    "does", "dont", "from", "has", "hide", "include", "includes", "including", "into", "major",
+    "not", "online", "other", "should", "show", "that", "the", "their", "them", "then", "there",
+    "these", "thing", "this", "those", "through", "when", "where", "with", "what", "will"
+  ]);
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -78,6 +85,11 @@
     }
     if (message.type === "status") {
       return { ok: true, counters, status: await getStatus() };
+    }
+    if (message.type === "resetAI") {
+      resetAI();
+      await updateStatus({ lastError: "" });
+      return { ok: true, status: await getStatus() };
     }
     if (message.type === "clear") {
       location.reload();
@@ -441,12 +453,20 @@
     };
     const availability = await LanguageModel.availability(options);
     await updateStatus({ aiText: availability });
-    if (availability === "unavailable") return null;
+    if (availability !== "available") {
+      await updateStatus({
+        aiText: availability,
+        aiReason: availability === "downloadable" || availability === "downloading"
+          ? "Open Spoilt and click Prepare local AI to download or finish preparing the text model."
+          : "Text Prompt API is unavailable in this Chrome context."
+      });
+      return null;
+    }
     return LanguageModel.create({
       ...options,
       monitor(monitor) {
         monitor.addEventListener("downloadprogress", (event) => {
-          updateStatus({ aiText: "downloading", aiDownload: event.loaded });
+          updateStatus({ aiText: "downloading", aiDownload: event.loaded, aiReason: "Preparing the text model." });
         });
       }
     });
@@ -475,12 +495,20 @@
     };
     const availability = await LanguageModel.availability(options);
     await updateStatus({ aiVision: availability });
-    if (availability === "unavailable") return null;
+    if (availability !== "available") {
+      await updateStatus({
+        aiVision: availability === "unavailable" ? "fallback" : availability,
+        aiReason: availability === "downloadable" || availability === "downloading"
+          ? "Vision is not ready; using title, alt text, captions, and source metadata until Prepare local AI finishes."
+          : "Vision Prompt API is unavailable; using image metadata fallback."
+      });
+      return null;
+    }
     return LanguageModel.create({
       ...options,
       monitor(monitor) {
         monitor.addEventListener("downloadprogress", (event) => {
-          updateStatus({ aiVision: "downloading", aiDownload: event.loaded });
+          updateStatus({ aiVision: "downloading", aiDownload: event.loaded, aiReason: "Preparing the vision model." });
         });
       }
     });
@@ -503,8 +531,42 @@
           return { ruleId: rule.id, ruleName: rule.name, reason: `keyword: ${keyword}` };
         }
       }
+      const descriptionMatch = descriptionFallbackMatch(source, rule);
+      if (descriptionMatch) return descriptionMatch;
     }
     return null;
+  }
+
+  function descriptionFallbackMatch(source, rule) {
+    const terms = getFallbackTerms(rule);
+    if (!terms.length) return null;
+    const matchedTerms = terms.filter((term) => source.includes(term));
+    const needed = Math.min(2, terms.length);
+    if (matchedTerms.length >= needed) {
+      return {
+        ruleId: rule.id,
+        ruleName: rule.name,
+        reason: `description fallback: ${matchedTerms.slice(0, 3).join(", ")}`
+      };
+    }
+    return null;
+  }
+
+  function getFallbackTerms(rule) {
+    const text = normalizeComparableText(`${rule.name || ""} ${rule.description || ""}`);
+    const phrases = [];
+    const quoted = String(`${rule.name || ""} ${rule.description || ""}`).match(/"([^"]+)"|'([^']+)'/g) || [];
+    for (const phrase of quoted) {
+      const normalized = normalizeComparableText(phrase.replace(/^["']|["']$/g, ""));
+      if (normalized.length >= MIN_FALLBACK_TERM_LENGTH) phrases.push(normalized);
+    }
+    const words = text.split(" ").filter((word) => {
+      return word.length >= MIN_FALLBACK_TERM_LENGTH
+        && !FALLBACK_STOP_WORDS.has(word)
+        && !/^\d+$/.test(word);
+    });
+    const terms = [...phrases, ...words];
+    return Array.from(new Set(terms)).slice(0, 30);
   }
 
   function getScanSignature() {

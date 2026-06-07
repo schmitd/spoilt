@@ -7,7 +7,9 @@ Spoilt is a Chrome extension that blacks out user-configured spoilers or unwante
 - Lets users define blocking rules with a name, description, and keywords.
 - Masks matching text with blacked-out spans.
 - Masks matching images with black placeholder shells.
-- Uses Chrome local inference for semantic text classification when `LanguageModel` is available.
+- Uses Chrome local inference for semantic text classification when `LanguageModel` is already available.
+- Provides a **Prepare local AI** popup action to trigger Chrome model download/preparation from a user gesture.
+- Uses rule names/descriptions as a conservative fallback when the local model is unavailable, so description-only rules can still catch direct terms.
 - Uses Chrome local image input when available; otherwise it checks image `alt`, `title`, ARIA label, caption, poster URL, and source metadata.
 - Sends no page content to a remote server. AI checks run through Chrome's on-device model APIs.
 
@@ -27,7 +29,8 @@ Spoilt is a Chrome extension that blacks out user-configured spoilers or unwante
 
 ## Usage
 
-- Click the toolbar icon to enable or disable protection, rescan the current tab, or open options.
+- Click the toolbar icon to enable or disable protection, prepare local AI, rescan the current tab, or open options.
+- Click **Prepare local AI** after install or Chrome updates if text AI or vision status is `downloadable`, `downloading`, or unavailable.
 - Add specific rules. Good rule descriptions include what to block and what not to block.
 - Add direct keywords for immediate masking even when Chrome local AI is unavailable.
 
@@ -64,7 +67,7 @@ Spoilt stores settings in `chrome.storage.sync` and per-tab status in `chrome.st
 
 ## Release Notes
 
-`1.0.1` refines rescanning, disable/unmask behavior, popup status handling, and requested permissions. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
+`1.0.2` fixes local-AI lifecycle issues: passive page scans no longer start model downloads, the popup can prepare local AI from a user gesture, description-only rules get fallback matching, and CI covers semantic AI masking with a mocked Prompt API. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
 
 ## License
 
