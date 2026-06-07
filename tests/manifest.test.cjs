@@ -10,6 +10,7 @@ assert.equal(manifest.minimum_chrome_version, '138');
 assert.ok(manifest.content_scripts[0].js.includes('src/content.js'));
 assert.ok(manifest.permissions.includes('storage'));
 assert.ok(manifest.permissions.includes('activeTab'));
+assert.equal(manifest.permissions.includes('scripting'), false);
 assert.ok(manifest.host_permissions.includes('<all_urls>'));
 
 for (const relative of [

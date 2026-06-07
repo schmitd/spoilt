@@ -64,7 +64,7 @@ Spoilt stores settings in `chrome.storage.sync` and per-tab status in `chrome.st
 
 ## Release Notes
 
-`1.0.0` is ready for unpacked use and GitHub release. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
+`1.0.1` refines rescanning, disable/unmask behavior, popup status handling, and requested permissions. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
 
 ## License
 

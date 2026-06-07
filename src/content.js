@@ -36,8 +36,8 @@
   let imageSessionPromise = null;
   let currentRun = 0;
   let counters = { text: 0, images: 0, aiText: 0, aiImages: 0 };
-  const processedTextNodes = new WeakSet();
-  const processedImages = new WeakSet();
+  let processedTextNodes = new WeakMap();
+  let processedImages = new WeakMap();
 
   init();
 
@@ -53,7 +53,14 @@
       if ((areaName === "sync" || areaName === "local") && changes[SETTINGS_KEY]) {
         settings = normalizeSettings(changes[SETTINGS_KEY].newValue);
         resetAI();
-        scheduleScan();
+        if (settings.enabled) {
+          startObserver();
+          scheduleScan();
+        } else {
+          stopObserver();
+          unmaskPage();
+          updateStatus({ enabled: false, counters, pendingText: 0, pendingImages: 0 });
+        }
       }
     });
     if (settings.enabled) {
@@ -113,11 +120,28 @@
   function startObserver() {
     if (observer) return;
     observer = new MutationObserver((mutations) => {
-      if (mutations.some((mutation) => mutation.addedNodes.length || mutation.type === "characterData")) {
+      if (mutations.some(shouldReactToMutation)) {
         scheduleScan();
       }
     });
     observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  }
+
+  function stopObserver() {
+    if (!observer) return;
+    observer.disconnect();
+    observer = null;
+  }
+
+  function shouldReactToMutation(mutation) {
+    if (mutation.target && isSpoiltNode(mutation.target)) return false;
+    return mutation.type === "characterData"
+      || Array.from(mutation.addedNodes).some((node) => !isSpoiltNode(node));
+  }
+
+  function isSpoiltNode(node) {
+    const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    return Boolean(element && element.closest(`.${MASKED_TEXT_CLASS}, .${IMAGE_SHELL_CLASS}, .${BACKGROUND_CLASS}`));
   }
 
   function scheduleScan(delay = SCAN_DEBOUNCE_MS) {
@@ -129,7 +153,11 @@
   }
 
   async function scanPage() {
-    if (!settings.enabled) return;
+    if (!settings.enabled) {
+      unmaskPage();
+      await updateStatus({ enabled: false, counters, pendingText: 0, pendingImages: 0 });
+      return;
+    }
     const runId = ++currentRun;
     const textCandidates = settings.scanText ? collectTextCandidates() : [];
     const imageCandidates = settings.scanImages ? collectImageCandidates() : [];
@@ -175,11 +203,13 @@
 
   function collectTextCandidates() {
     const candidates = [];
+    const scanSignature = getScanSignature();
     const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         if (candidates.length >= settings.maxTextNodesPerScan) return NodeFilter.FILTER_REJECT;
-        if (processedTextNodes.has(node)) return NodeFilter.FILTER_REJECT;
-        if (!node.nodeValue || normalizeWhitespace(node.nodeValue).length < 4) return NodeFilter.FILTER_REJECT;
+        const text = normalizeWhitespace(node.nodeValue);
+        if (!text || text.length < 4) return NodeFilter.FILTER_REJECT;
+        if (processedTextNodes.get(node) === `${scanSignature}:${text}`) return NodeFilter.FILTER_REJECT;
         const parent = node.parentElement;
         if (!parent || shouldSkipElement(parent)) return NodeFilter.FILTER_REJECT;
         if (!isVisible(parent)) return NodeFilter.FILTER_REJECT;
@@ -190,7 +220,7 @@
     let node = walker.nextNode();
     while (node && candidates.length < settings.maxTextNodesPerScan) {
       const text = normalizeWhitespace(node.nodeValue);
-      processedTextNodes.add(node);
+      processedTextNodes.set(node, `${scanSignature}:${text}`);
       candidates.push({ node, text });
       node = walker.nextNode();
     }
@@ -199,13 +229,15 @@
 
   function collectImageCandidates() {
     const candidates = [];
+    const scanSignature = getScanSignature();
     const elements = Array.from(document.querySelectorAll("img, picture, svg[role='img'], video[poster], canvas"));
     for (const element of elements) {
       if (candidates.length >= settings.maxImagesPerScan) break;
-      if (processedImages.has(element) || shouldSkipElement(element) || !isVisible(element)) continue;
+      const metadata = getImageMetadata(element);
+      if (processedImages.get(element) === `${scanSignature}:${metadata}` || shouldSkipElement(element) || !isVisible(element)) continue;
       const rect = element.getBoundingClientRect();
       if (rect.width < 24 || rect.height < 24) continue;
-      processedImages.add(element);
+      processedImages.set(element, `${scanSignature}:${metadata}`);
       candidates.push({ element });
     }
     return candidates;
@@ -232,6 +264,7 @@
     span.className = MASKED_TEXT_CLASS;
     span.textContent = node.nodeValue;
     span.title = `Spoilt blocked: ${match.ruleName || "configured content"}`;
+    span.setAttribute("aria-label", "Spoilt blocked content");
     span.dataset.spoiltReason = match.reason || "matched configured content";
     node.parentNode.replaceChild(span, node);
     counters.text += 1;
@@ -242,6 +275,7 @@
     const shell = document.createElement("span");
     shell.className = IMAGE_SHELL_CLASS;
     shell.title = `Spoilt blocked image: ${match.ruleName || "configured content"}`;
+    shell.setAttribute("aria-label", "Spoilt blocked image");
     shell.dataset.spoiltReason = match.reason || "matched configured content";
 
     const rect = element.getBoundingClientRect();
@@ -255,6 +289,29 @@
     parent.insertBefore(shell, element);
     shell.appendChild(element);
     counters.images += 1;
+  }
+
+  function unmaskPage() {
+    document.querySelectorAll(`.${MASKED_TEXT_CLASS}`).forEach((span) => {
+      span.replaceWith(document.createTextNode(span.textContent || ""));
+    });
+    document.querySelectorAll(`.${IMAGE_SHELL_CLASS}`).forEach((shell) => {
+      const parent = shell.parentNode;
+      if (!parent) return;
+      while (shell.firstChild) parent.insertBefore(shell.firstChild, shell);
+      shell.remove();
+    });
+    document.querySelectorAll(`.${BACKGROUND_CLASS}`).forEach((element) => {
+      element.classList.remove(BACKGROUND_CLASS);
+      element.removeAttribute("data-spoilt-reason");
+    });
+    resetProcessedCaches();
+    counters = { text: 0, images: 0, aiText: 0, aiImages: 0 };
+  }
+
+  function resetProcessedCaches() {
+    processedTextNodes = new WeakMap();
+    processedImages = new WeakMap();
   }
 
   async function classifyTextWithAI(candidates, runId) {
@@ -330,6 +387,7 @@
   }
 
   async function promptImage(session, element, metadataText) {
+    const promptElement = getPromptImageElement(element);
     try {
       const result = await session.prompt([
         {
@@ -339,7 +397,7 @@
               type: "text",
               value: `User blocking rules:\n${buildRulesSummary(settings.rules)}\n\nStrictness: ${strictnessGuidance(settings.strictness)}\n\nMetadata from title/alt/nearby text: ${metadataText || "none"}\n\nShould this image be blacked out? Return only JSON {"block":boolean,"rule":"","reason":""}.`
             },
-            { type: "image", value: element }
+            { type: "image", value: promptElement }
           ]
         }
       ], {
@@ -449,17 +507,42 @@
     return null;
   }
 
+  function getScanSignature() {
+    const rulesSignature = settings.rules.map((rule) => [
+      rule.id,
+      rule.name,
+      rule.description,
+      (rule.keywords || []).join("|")
+    ].join(":")).join(";");
+    return [
+      settings.strictness,
+      settings.useLocalAI,
+      settings.useVision,
+      settings.scanText,
+      settings.scanImages,
+      rulesSignature
+    ].join("::");
+  }
+
   function getImageMetadata(element) {
+    const imageElement = getPromptImageElement(element);
     const parts = [
-      element.getAttribute("alt"),
-      element.getAttribute("title"),
-      element.getAttribute("aria-label"),
-      element.getAttribute("poster"),
-      element.currentSrc,
-      element.src,
+      imageElement.getAttribute("alt"),
+      imageElement.getAttribute("title"),
+      imageElement.getAttribute("aria-label"),
+      imageElement.getAttribute("poster"),
+      imageElement.currentSrc,
+      imageElement.src,
       nearestCaptionText(element)
     ];
     return normalizeWhitespace(parts.filter(Boolean).join(" ")).slice(0, 1000);
+  }
+
+  function getPromptImageElement(element) {
+    if (element.tagName && element.tagName.toLowerCase() === "picture") {
+      return element.querySelector("img") || element;
+    }
+    return element;
   }
 
   function nearestCaptionText(element) {

@@ -110,11 +110,13 @@ def main():
             }],
         }
         stub = f"""
+          window.__spoiltSettings = {json.dumps(settings)};
+          window.__spoiltStorageListeners = [];
           window.chrome = {{
-            runtime: {{ onMessage: {{ addListener() {{}} }} }},
+            runtime: {{ onMessage: {{ addListener(listener) {{ window.__spoiltMessageListener = listener; }} }} }},
             storage: {{
               sync: {{
-                async get(key) {{ return {{ [key]: {json.dumps(settings)} }}; }},
+                async get(key) {{ return {{ [key]: window.__spoiltSettings }}; }},
                 async set(_value) {{}}
               }},
               local: {{
@@ -122,7 +124,14 @@ def main():
                 async get(key) {{ return {{ [key]: this._store[key] }}; }},
                 async set(value) {{ Object.assign(this._store, value); }}
               }},
-              onChanged: {{ addListener() {{}} }}
+              onChanged: {{ addListener(listener) {{ window.__spoiltStorageListeners.push(listener); }} }}
+            }}
+          }};
+          window.__spoiltSetSettings = (nextSettings) => {{
+            const oldValue = window.__spoiltSettings;
+            window.__spoiltSettings = nextSettings;
+            for (const listener of window.__spoiltStorageListeners) {{
+              listener({{ "spoilt.settings": {{ oldValue, newValue: nextSettings }} }}, "sync");
             }}
           }};
         """
@@ -135,7 +144,29 @@ def main():
         counts = eval_js(ws, "({ text: document.querySelectorAll('.spoilt-redacted-text').length, images: document.querySelectorAll('.spoilt-image-shell').length, safeReadable: document.body.textContent.includes('This paragraph is safe') })")
         if counts["text"] < 2 or counts["images"] < 1 or not counts["safeReadable"]:
             raise AssertionError(f"Unexpected mask counts: {counts}")
-        print(f"e2e_chrome.py passed: {counts}")
+
+        updated_settings = dict(settings)
+        updated_settings["rules"] = [{
+            "id": "safe-text",
+            "name": "Safe text regression check",
+            "description": "Used by the E2E test to verify rule changes rescan previously processed text.",
+            "keywords": ["paragraph is safe"],
+        }]
+        eval_js(ws, f"window.__spoiltSetSettings({json.dumps(updated_settings)})")
+        time.sleep(1.3)
+        rule_change_counts = eval_js(ws, "({ text: document.querySelectorAll('.spoilt-redacted-text').length, safeMasked: Array.from(document.querySelectorAll('.spoilt-redacted-text')).some((node) => node.textContent.includes('safe')) })")
+        if rule_change_counts["text"] < 3 or not rule_change_counts["safeMasked"]:
+            raise AssertionError(f"Rule-change rescan failed: {rule_change_counts}")
+
+        disabled_settings = dict(updated_settings)
+        disabled_settings["enabled"] = False
+        eval_js(ws, f"window.__spoiltSetSettings({json.dumps(disabled_settings)})")
+        time.sleep(0.4)
+        disabled_counts = eval_js(ws, "({ text: document.querySelectorAll('.spoilt-redacted-text').length, images: document.querySelectorAll('.spoilt-image-shell').length, safeReadable: document.body.textContent.includes('This paragraph is safe'), spoilerReadable: document.body.textContent.includes('Major spoiler') })")
+        if disabled_counts["text"] != 0 or disabled_counts["images"] != 0 or not disabled_counts["safeReadable"] or not disabled_counts["spoilerReadable"]:
+            raise AssertionError(f"Disable unmask failed: {disabled_counts}")
+
+        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts}")
     finally:
         try:
             chrome.terminate()

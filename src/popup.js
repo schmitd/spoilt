@@ -53,10 +53,19 @@ function renderStatus(status) {
   document.querySelector("#image-count").textContent = String(counters.images || 0);
   document.querySelector("#ai-text").textContent = status.aiText || "unknown";
   document.querySelector("#ai-vision").textContent = status.aiVision || "fallback";
-  if (status.lastError) showError(status.lastError);
+  if (status.lastError) {
+    showError(status.lastError);
+  } else {
+    clearError();
+  }
 }
 
 function showError(message) {
   errorEl.hidden = false;
   errorEl.textContent = message;
+}
+
+function clearError() {
+  errorEl.hidden = true;
+  errorEl.textContent = "";
 }
