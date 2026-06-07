@@ -12,6 +12,8 @@ import http.server
 import json
 import os
 import pathlib
+import shutil
+import socket
 import socketserver
 import subprocess
 import tempfile
@@ -23,7 +25,6 @@ import websocket
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PORT = 8776
-DEBUG_PORT = 9226
 URL = f"http://127.0.0.1:{PORT}/tests/test-page.html"
 
 
@@ -32,7 +33,29 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-def wait_for_json(url, timeout=10):
+def free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def chrome_binary():
+    candidates = [
+        os.environ.get("CHROME"),
+        os.environ.get("CHROME_BIN"),
+        "google-chrome-stable",
+        "google-chrome",
+        "chrome",
+        "chromium",
+        "chromium-browser",
+    ]
+    for candidate in candidates:
+        if candidate and shutil.which(candidate):
+            return candidate
+    raise RuntimeError("No Chrome/Chromium binary found for browser harness")
+
+
+def wait_for_json(url, timeout=20):
     deadline = time.time() + timeout
     last_error = None
     while time.time() < deadline:
@@ -125,19 +148,20 @@ def main():
     thread.start()
 
     profile = tempfile.TemporaryDirectory(prefix="spoilt-chrome-")
+    debug_port = free_port()
     chrome = subprocess.Popen([
-        "google-chrome-stable",
+        chrome_binary(),
         "--headless=new",
         "--disable-gpu",
         "--no-sandbox",
         f"--user-data-dir={profile.name}",
-        f"--remote-debugging-port={DEBUG_PORT}",
+        f"--remote-debugging-port={debug_port}",
         "--remote-allow-origins=*",
         URL,
     ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 
     try:
-        tabs = wait_for_json(f"http://127.0.0.1:{DEBUG_PORT}/json/list")
+        tabs = wait_for_json(f"http://127.0.0.1:{debug_port}/json/list")
         page = next(tab for tab in tabs if tab.get("type") == "page")
         ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=5)
         cdp(ws, "Runtime.enable")

@@ -16,10 +16,9 @@ import urllib.request
 
 import websocket
 
-from e2e_chrome import cdp, eval_js, inject_extension_stubs, wait_for_json
+from e2e_chrome import cdp, chrome_binary, eval_js, free_port, inject_extension_stubs, wait_for_json
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEBUG_PORT = 9336
 
 BASE_SETTINGS = {
     "enabled": True,
@@ -45,17 +44,18 @@ def page_url(body):
 
 def open_browser(url):
     profile = tempfile.TemporaryDirectory(prefix="spoilt-adv-")
+    debug_port = free_port()
     chrome = subprocess.Popen([
-        "google-chrome-stable",
+        chrome_binary(),
         "--headless=new",
         "--disable-gpu",
         "--no-sandbox",
         f"--user-data-dir={profile.name}",
-        f"--remote-debugging-port={DEBUG_PORT}",
+        f"--remote-debugging-port={debug_port}",
         "--remote-allow-origins=*",
         url,
     ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    tabs = wait_for_json(f"http://127.0.0.1:{DEBUG_PORT}/json/list")
+    tabs = wait_for_json(f"http://127.0.0.1:{debug_port}/json/list")
     page = next(tab for tab in tabs if tab.get("type") == "page")
     ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=5)
     cdp(ws, "Runtime.enable")
