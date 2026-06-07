@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spoilt Test Fixture</title>
+  <style>
+    body { font-family: Georgia, serif; margin: 40px; max-width: 860px; }
+    .card { border: 1px solid #222; margin: 20px 0; padding: 18px; }
+    img { display: block; height: 180px; width: 260px; }
+  </style>
+</head>
+<body>
+  <h1>Review page</h1>
+  <p>This paragraph is safe and should remain readable.</p>
+  <p class="spoiler-text">Major spoiler: the ending reveals the detective was the ghost.</p>
+  <figure class="card">
+    <img alt="spoiler image showing the final boss death" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='180'%3E%3Crect width='260' height='180' fill='%23c44'/%3E%3Ctext x='20' y='90' font-size='22'%3EFinal Boss%3C/text%3E%3C/svg%3E">
+    <figcaption>Promotional still</figcaption>
+  </figure>
+  <script>
+    setTimeout(() => {
+      const p = document.createElement('p');
+      p.textContent = 'Late injected spoiler leak: the finale has a surprise death.';
+      document.body.appendChild(p);
+    }, 700);
+  </script>
+</body>
+</html>

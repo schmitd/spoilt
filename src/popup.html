@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spoilt</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p>Spoilt</p>
+      <h1>Content shield</h1>
+    </header>
+
+    <label class="toggle">
+      <input id="enabled" type="checkbox">
+      <span>Enabled</span>
+    </label>
+
+    <dl class="stats">
+      <div><dt>Text masks</dt><dd id="text-count">0</dd></div>
+      <div><dt>Image masks</dt><dd id="image-count">0</dd></div>
+      <div><dt>Text AI</dt><dd id="ai-text">unknown</dd></div>
+      <div><dt>Vision AI</dt><dd id="ai-vision">unknown</dd></div>
+    </dl>
+
+    <p id="last-error" class="error" hidden></p>
+
+    <div class="actions">
+      <button id="rescan" type="button">Rescan tab</button>
+      <button id="options" type="button">Options</button>
+      <button id="clear" type="button">Reload to clear</button>
+    </div>
+  </main>
+  <script src="shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

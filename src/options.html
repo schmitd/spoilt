@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spoilt Options</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Spoilt</p>
+      <h1>Black out the parts of the web you do not want to encounter.</h1>
+      <p>Define spoiler or avoidance rules. Spoilt uses keyword matching immediately and Chrome's local LanguageModel API for semantic text and image checks when available.</p>
+    </section>
+
+    <form id="settings-form" class="panel">
+      <div class="grid">
+        <label class="switch-row">
+          <input id="enabled" type="checkbox">
+          <span>Enable protection</span>
+        </label>
+        <label class="switch-row">
+          <input id="useLocalAI" type="checkbox">
+          <span>Use Chrome local AI when available</span>
+        </label>
+        <label class="switch-row">
+          <input id="scanText" type="checkbox">
+          <span>Scan visible text</span>
+        </label>
+        <label class="switch-row">
+          <input id="scanImages" type="checkbox">
+          <span>Scan images</span>
+        </label>
+        <label class="switch-row">
+          <input id="useVision" type="checkbox">
+          <span>Use local image understanding when available</span>
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Strictness</span>
+        <select id="strictness">
+          <option value="loose">Loose: block probable matches</option>
+          <option value="balanced">Balanced: block clear matches</option>
+          <option value="strict">Strict: block only specific matches</option>
+        </select>
+      </label>
+
+      <div class="section-title">
+        <h2>Rules</h2>
+        <button id="add-rule" type="button">Add rule</button>
+      </div>
+      <div id="rules"></div>
+
+      <div class="actions">
+        <button class="primary" type="submit">Save settings</button>
+        <button id="restore-defaults" type="button">Restore defaults</button>
+        <span id="save-status" role="status"></span>
+      </div>
+    </form>
+  </main>
+  <template id="rule-template">
+    <article class="rule-card">
+      <div class="rule-head">
+        <h3>Rule</h3>
+        <button class="remove-rule" type="button">Remove</button>
+      </div>
+      <label class="field">
+        <span>Name</span>
+        <input class="rule-name" type="text" placeholder="e.g. Formula 1 results">
+      </label>
+      <label class="field">
+        <span>Description for local AI</span>
+        <textarea class="rule-description" rows="3" placeholder="What should be hidden? Include examples and boundaries."></textarea>
+      </label>
+      <label class="field">
+        <span>Keywords, one per line or comma-separated</span>
+        <textarea class="rule-keywords" rows="4" placeholder="spoiler, winner, championship"></textarea>
+      </label>
+    </article>
+  </template>
+  <script src="shared.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

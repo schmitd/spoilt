@@ -1,0 +1,18 @@
+{
+  "name": "spoilt",
+  "version": "1.0.0",
+  "description": "Chrome extension that blacks out user-configured spoilers and unwanted content using Chrome local inference APIs when available.",
+  "license": "MIT",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node tests/shared.test.cjs && node tests/manifest.test.cjs",
+    "package": "zip -r spoilt-extension.zip manifest.json src icons README.md LICENSE -x '*.DS_Store'"
+  },
+  "keywords": [
+    "chrome-extension",
+    "spoilers",
+    "local-ai",
+    "gemini-nano",
+    "privacy"
+  ]
+}

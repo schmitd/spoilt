@@ -1,0 +1,56 @@
+.spoilt-redacted-text {
+  background: #000 !important;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  color: transparent !important;
+  cursor: help;
+  text-shadow: none !important;
+}
+
+.spoilt-redacted-text::selection {
+  background: #000 !important;
+  color: transparent !important;
+}
+
+.spoilt-image-shell {
+  background: #000 !important;
+  display: inline-block !important;
+  line-height: 0 !important;
+  position: relative !important;
+  vertical-align: middle !important;
+}
+
+.spoilt-image-shell > img,
+.spoilt-image-shell > picture,
+.spoilt-image-shell > svg,
+.spoilt-image-shell > video,
+.spoilt-image-shell > canvas {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+.spoilt-image-shell::after {
+  align-items: center;
+  background: #000;
+  color: #777;
+  content: "Spoilt";
+  display: flex;
+  font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  inset: 0;
+  justify-content: center;
+  letter-spacing: .08em;
+  position: absolute;
+  text-transform: uppercase;
+  z-index: 2147483646;
+}
+
+.spoilt-background-redacted {
+  background: #000 !important;
+  color: transparent !important;
+  position: relative !important;
+}
+
+.spoilt-background-redacted > * {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
