@@ -9,7 +9,7 @@
   --danger: #c43b22;
   --muted: #68604f;
   --panel: #fffdf4;
-  --shadow: 10px 10px 0 #11100d;
+  --shadow: 7px 7px 0 #11100d;
   --radius: 0;
 }
 
@@ -21,7 +21,7 @@ body {
     radial-gradient(circle at 88% 10%, rgba(232, 255, 87, .55), transparent 18rem),
     linear-gradient(135deg, #f4f1e7 0%, #d7cdb8 100%);
   color: var(--ink);
-  font: 16px/1.5 "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font: 15px/1.42 "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   margin: 0;
   min-height: 100vh;
 }
@@ -35,25 +35,25 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .page {
   margin: 0 auto;
-  max-width: 1120px;
-  padding: 46px 24px 64px;
+  max-width: 1040px;
+  padding: 28px 18px 42px;
 }
 
 .hero {
   background: var(--ink);
   color: var(--paper);
   display: grid;
-  gap: 22px;
+  gap: 16px;
   grid-template-columns: minmax(0, 1.5fr) minmax(220px, .5fr);
-  margin-bottom: 28px;
-  padding: clamp(24px, 5vw, 52px);
+  margin-bottom: 20px;
+  padding: clamp(18px, 4vw, 34px);
   position: relative;
 }
 
 .hero::after {
   background: repeating-linear-gradient(-45deg, var(--signal), var(--signal) 8px, transparent 8px, transparent 16px);
   content: "";
-  height: 18px;
+  height: 12px;
   inset: auto 0 0 0;
   position: absolute;
 }
@@ -61,16 +61,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .eyebrow {
   font: 900 12px/1 "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace;
   letter-spacing: .2em;
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   text-transform: uppercase;
 }
 
-.eyebrow.small { color: var(--danger); margin-bottom: 6px; }
+.eyebrow.small { color: var(--danger); margin-bottom: 4px; }
 
 h1 {
-  font-size: clamp(46px, 8vw, 92px);
+  font-size: clamp(36px, 6vw, 68px);
   letter-spacing: -.075em;
-  line-height: .83;
+  line-height: .86;
   margin: 0;
   max-width: 780px;
 }
@@ -80,8 +80,8 @@ h2, h3, p { margin-top: 0; }
 .hero p:last-child {
   align-self: end;
   color: #d8d0bd;
-  font-size: 17px;
-  margin: 0 0 22px;
+  font-size: 15px;
+  margin: 0 0 14px;
 }
 
 .panel, .rule-card, .memory-panel {
@@ -90,13 +90,13 @@ h2, h3, p { margin-top: 0; }
   box-shadow: var(--shadow);
 }
 
-.panel { padding: clamp(18px, 3vw, 30px); }
+.panel { padding: clamp(14px, 2.2vw, 22px); }
 
 .grid, .memory-grid {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  margin-bottom: 22px;
+  gap: 9px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  margin-bottom: 16px;
 }
 
 .switch-row {
@@ -104,17 +104,17 @@ h2, h3, p { margin-top: 0; }
   background: var(--paper-2);
   border: 1px solid var(--rule);
   display: flex;
-  gap: 10px;
-  min-height: 52px;
-  padding: 12px;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 10px;
 }
 
 .switch-row input { accent-color: var(--ink); }
 
-.field { display: grid; gap: 7px; margin-bottom: 16px; }
+.field { display: grid; gap: 5px; margin-bottom: 11px; }
 
 .field span {
-  font: 900 11px/1 "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace;
+  font: 900 10px/1 "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace;
   letter-spacing: .1em;
   text-transform: uppercase;
 }
@@ -124,22 +124,22 @@ input[type="text"], input[type="number"], select, textarea {
   border: 2px solid var(--rule);
   border-radius: var(--radius);
   color: var(--ink);
-  min-height: 46px;
-  padding: 10px 12px;
+  min-height: 38px;
+  padding: 7px 9px;
   width: 100%;
 }
 
 textarea { resize: vertical; }
 
 .memory-panel {
-  box-shadow: 6px 6px 0 var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
   display: grid;
-  gap: 18px;
-  margin: 24px 0;
-  padding: 20px;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 14px;
 }
 
-.memory-panel h2 { font-size: clamp(28px, 4vw, 46px); letter-spacing: -.05em; line-height: .9; margin-bottom: 10px; }
+.memory-panel h2 { font-size: clamp(24px, 3.5vw, 36px); letter-spacing: -.05em; line-height: .92; margin-bottom: 7px; }
 
 .muted { color: var(--muted); }
 
@@ -152,26 +152,26 @@ textarea { resize: vertical; }
 
 .section-title {
   border-top: 3px solid var(--rule);
-  margin-top: 28px;
-  padding-top: 24px;
+  margin-top: 20px;
+  padding-top: 16px;
 }
 
 .rule-card {
-  box-shadow: 5px 5px 0 var(--ink);
-  margin: 18px 0;
-  padding: 18px;
+  box-shadow: 4px 4px 0 var(--ink);
+  margin: 12px 0;
+  padding: 13px;
 }
 
-.rule-head h3 { font-size: 28px; letter-spacing: -.04em; margin-bottom: 10px; }
+.rule-head h3 { font-size: 24px; letter-spacing: -.04em; margin-bottom: 7px; }
 
 button {
   background: #fffef9;
   border: 2px solid var(--rule);
   color: var(--ink);
   cursor: pointer;
-  font: 900 12px/1 "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace;
-  min-height: 44px;
-  padding: 12px 14px;
+  font: 900 11px/1 "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace;
+  min-height: 38px;
+  padding: 9px 11px;
   text-transform: uppercase;
   transition: transform .16s cubic-bezier(.2, .8, .2, 1), box-shadow .16s cubic-bezier(.2, .8, .2, 1);
 }
@@ -185,8 +185,8 @@ button.primary { background: var(--ink); color: var(--paper); }
 .actions {
   border-top: 3px solid var(--rule);
   justify-content: flex-start;
-  margin-top: 24px;
-  padding-top: 20px;
+  margin-top: 18px;
+  padding-top: 14px;
 }
 
 #save-status { color: var(--muted); font-weight: 700; }
@@ -196,10 +196,10 @@ button.primary { background: var(--ink); color: var(--paper); }
 }
 
 @media (max-width: 720px) {
-  .page { padding: 18px 12px 36px; }
+  .page { padding: 12px 10px 28px; }
   .hero { grid-template-columns: 1fr; }
-  .hero p:last-child { margin-bottom: 18px; }
-  .panel { padding: 14px; }
+  .hero p:last-child { margin-bottom: 12px; }
+  .panel { padding: 12px; }
   .section-title, .rule-head, .actions { align-items: stretch; flex-direction: column; }
   button { width: 100%; }
 }
