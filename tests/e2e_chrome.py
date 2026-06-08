@@ -232,14 +232,14 @@ def main():
               return {
                 async prompt(promptText) {
                   const snippets = JSON.parse(promptText.match(/Snippets:\\n([\\s\\S]*)$/)[1]);
-                  return JSON.stringify({
+                  return "```json\\n" + JSON.stringify({
                     decisions: snippets.map((snippet) => ({
                       i: snippet.i,
                       block: snippet.text.includes("detective was the ghost"),
                       rule: "Plot outcome",
                       reason: "mock semantic description match"
                     }))
-                  });
+                  }) + "\\n```";
                 },
                 destroy() {}
               };
@@ -288,7 +288,30 @@ def main():
         if recovery_counts["text"] < 1 or not recovery_counts["semanticMasked"] or recovery_counts["sessions"] < 2:
             raise AssertionError(f"Destroyed-session recovery failed: {recovery_counts}")
 
-        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts} semantic={semantic_counts} recovery={recovery_counts}")
+        cdp(ws, "Page.navigate", {"url": URL})
+        time.sleep(0.8)
+        malformed_json_language_model_mock = """
+          window.LanguageModel = {
+            async availability() { return "available"; },
+            async create() {
+              return {
+                async prompt(_promptText) {
+                  return "{ definitely not valid json";
+                },
+                destroy() {}
+              };
+            }
+          };
+        """
+        inject_extension_stubs(ws, semantic_settings, malformed_json_language_model_mock)
+        time.sleep(1.2)
+        malformed_status = eval_js(ws, "window.__spoiltLocalStore['spoilt.status']")
+        malformed_error = (malformed_status or {}).get("lastError") or ""
+        malformed_reason = (malformed_status or {}).get("aiReason") or ""
+        if "Text AI unavailable" in malformed_error or "invalid JSON" not in malformed_reason:
+            raise AssertionError(f"Malformed JSON should not be reported as model unavailable: {malformed_status}")
+
+        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts} semantic={semantic_counts} recovery={recovery_counts} malformed={malformed_status}")
     finally:
         try:
             chrome.terminate()

@@ -353,6 +353,13 @@
       try {
         decisions = await promptTextBatch(session, batch);
       } catch (error) {
+        if (isJSONParseError(error)) {
+          await updateStatus({
+            aiText: "available",
+            aiReason: "The local text model returned invalid JSON for one batch; Spoilt skipped that batch and kept scanning."
+          });
+          continue;
+        }
         if (!isDestroyedSessionError(error)) {
           await updateStatus({ lastError: `Text AI unavailable: ${formatError(error)}` });
           continue;
@@ -364,6 +371,13 @@
         try {
           decisions = await promptTextBatch(session, batch);
         } catch (retryError) {
+          if (isJSONParseError(retryError)) {
+            await updateStatus({
+              aiText: "available",
+              aiReason: "The local text model returned invalid JSON after session recovery; Spoilt skipped that batch."
+            });
+            continue;
+          }
           await updateStatus({ lastError: `Text AI unavailable after session recovery: ${formatError(retryError)}` });
           continue;
         }
@@ -466,6 +480,13 @@
       return parseJSONResult(result);
     } catch (error) {
       if (isDestroyedSessionError(error)) return { retryWithFreshSession: true };
+      if (isJSONParseError(error)) {
+        await updateStatus({
+          aiVision: "available",
+          aiReason: "The local vision model returned invalid JSON for one image; Spoilt used metadata fallback for that image."
+        });
+        return null;
+      }
       const errorText = formatError(error);
       const isTaint = errorText.includes("SecurityError") || errorText.includes("taint");
       await updateStatus({
@@ -584,6 +605,10 @@
   function isDestroyedSessionError(error) {
     const text = formatError(error).toLowerCase();
     return text.includes("invalidstateerror") && (text.includes("destroyed") || text.includes("session"));
+  }
+
+  function isJSONParseError(error) {
+    return error && error.name === "SyntaxError";
   }
 
   function keywordMatch(text, rules) {
@@ -749,12 +774,52 @@
 
   function parseJSONResult(value) {
     if (typeof value !== "string") return value || {};
+    const cleaned = stripMarkdownFence(value.trim());
     try {
-      return JSON.parse(value);
+      return JSON.parse(cleaned);
     } catch (_error) {
-      const match = value.match(/\{[\s\S]*\}/);
-      return match ? JSON.parse(match[0]) : {};
+      const jsonObject = extractFirstJSONObject(cleaned);
+      if (!jsonObject) {
+        if (cleaned.includes("{") || cleaned.includes("}")) throw new SyntaxError("Model returned malformed JSON.");
+        return {};
+      }
+      return JSON.parse(jsonObject);
     }
+  }
+
+  function stripMarkdownFence(value) {
+    const match = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    return match ? match[1].trim() : value;
+  }
+
+  function extractFirstJSONObject(value) {
+    const start = value.indexOf("{");
+    if (start < 0) return "";
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < value.length; index += 1) {
+      const char = value[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+      if (char === "\"") {
+        inString = true;
+      } else if (char === "{") {
+        depth += 1;
+      } else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return value.slice(start, index + 1);
+      }
+    }
+    return "";
   }
 
   function normalizeComparableText(text) {
