@@ -252,7 +252,43 @@ def main():
         if semantic_counts["text"] < 1 or not semantic_counts["semanticMasked"]:
             raise AssertionError(f"Description-only semantic AI masking failed: {semantic_counts}")
 
-        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts} semantic={semantic_counts}")
+        cdp(ws, "Page.navigate", {"url": URL})
+        time.sleep(0.8)
+        recovering_language_model_mock = """
+          window.__spoiltCreatedSessions = 0;
+          window.LanguageModel = {
+            async availability() { return "available"; },
+            async create() {
+              window.__spoiltCreatedSessions += 1;
+              const sessionNumber = window.__spoiltCreatedSessions;
+              return {
+                async prompt(promptText) {
+                  if (sessionNumber === 1) {
+                    const error = new DOMException("Failed to execute 'prompt' on 'LanguageModel': The model execution session has been destroyed.", "InvalidStateError");
+                    throw error;
+                  }
+                  const snippets = JSON.parse(promptText.match(/Snippets:\\n([\\s\\S]*)$/)[1]);
+                  return JSON.stringify({
+                    decisions: snippets.map((snippet) => ({
+                      i: snippet.i,
+                      block: snippet.text.includes("detective was the ghost"),
+                      rule: "Plot outcome",
+                      reason: "mock recovered session"
+                    }))
+                  });
+                },
+                destroy() {}
+              };
+            }
+          };
+        """
+        inject_extension_stubs(ws, semantic_settings, recovering_language_model_mock)
+        time.sleep(1.6)
+        recovery_counts = eval_js(ws, "({ text: document.querySelectorAll('.spoilt-redacted-text').length, semanticMasked: Array.from(document.querySelectorAll('.spoilt-redacted-text')).some((node) => node.textContent.includes('detective was the ghost')), sessions: window.__spoiltCreatedSessions, status: window.__spoiltLocalStore['spoilt.status'] })")
+        if recovery_counts["text"] < 1 or not recovery_counts["semanticMasked"] or recovery_counts["sessions"] < 2:
+            raise AssertionError(f"Destroyed-session recovery failed: {recovery_counts}")
+
+        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts} semantic={semantic_counts} recovery={recovery_counts}")
     finally:
         try:
             chrome.terminate()

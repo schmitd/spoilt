@@ -343,13 +343,31 @@
   }
 
   async function classifyTextWithAI(candidates, runId) {
-    const session = await getTextSession();
+    let session = await getTextSession();
     if (!session) return;
     for (let index = 0; index < candidates.length; index += AI_TEXT_BATCH_SIZE) {
       if (runId !== currentRun) return;
       const batch = candidates.slice(index, index + AI_TEXT_BATCH_SIZE).filter((candidate) => candidate.node.parentNode);
       if (!batch.length) continue;
-      const decisions = await promptTextBatch(session, batch);
+      let decisions = [];
+      try {
+        decisions = await promptTextBatch(session, batch);
+      } catch (error) {
+        if (!isDestroyedSessionError(error)) {
+          await updateStatus({ lastError: `Text AI unavailable: ${formatError(error)}` });
+          continue;
+        }
+        await resetTextSession();
+        await updateStatus({ aiText: "recovering", aiReason: "The local text model session expired; recreating it." });
+        session = await getTextSession();
+        if (!session || runId !== currentRun) return;
+        try {
+          decisions = await promptTextBatch(session, batch);
+        } catch (retryError) {
+          await updateStatus({ lastError: `Text AI unavailable after session recovery: ${formatError(retryError)}` });
+          continue;
+        }
+      }
       for (const decision of decisions) {
         const candidate = batch[decision.i];
         if (candidate && decision.block && candidate.node.parentNode) {
@@ -366,44 +384,46 @@
   async function promptTextBatch(session, batch) {
     const payload = batch.map((candidate, i) => ({ i, text: candidate.text.slice(0, 600) }));
     const prompt = `User blocking rules:\n${buildRulesSummary(settings.rules)}\n\nRecent spoiler intelligence:\n${buildFullMemorySummary() || "No recent memory yet."}\n\nStrictness: ${strictnessGuidance(settings.strictness)}\n\nClassify each snippet. Return only JSON with shape {"decisions":[{"i":0,"block":false,"rule":"","reason":""}]}. Snippets:\n${JSON.stringify(payload)}`;
-    try {
-      const result = await session.prompt(prompt, {
-        responseConstraint: {
-          type: "object",
-          properties: {
-            decisions: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  i: { type: "number" },
-                  block: { type: "boolean" },
-                  rule: { type: "string" },
-                  reason: { type: "string" }
-                },
-                required: ["i", "block"]
-              }
+    const result = await session.prompt(prompt, {
+      responseConstraint: {
+        type: "object",
+        properties: {
+          decisions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                i: { type: "number" },
+                block: { type: "boolean" },
+                rule: { type: "string" },
+                reason: { type: "string" }
+              },
+              required: ["i", "block"]
             }
-          },
-          required: ["decisions"]
-        }
-      });
-      const parsed = parseJSONResult(result);
-      return Array.isArray(parsed.decisions) ? parsed.decisions : [];
-    } catch (error) {
-      await updateStatus({ lastError: `Text AI unavailable: ${formatError(error)}` });
-      return [];
-    }
+          }
+        },
+        required: ["decisions"]
+      }
+    });
+    const parsed = parseJSONResult(result);
+    return Array.isArray(parsed.decisions) ? parsed.decisions : [];
   }
 
   async function classifyImagesWithAI(candidates, runId) {
-    const session = await getImageSession();
+    let session = await getImageSession();
     if (!session) return;
     for (let i = 0; i < candidates.length; i += 1) {
       if (runId !== currentRun) return;
       const candidate = candidates[i];
       if (!candidate.element.isConnected || candidate.element.closest(`.${IMAGE_SHELL_CLASS}`)) continue;
-      const decision = await promptImage(session, candidate.element, candidate.metadataText);
+      let decision = await promptImage(session, candidate.element, candidate.metadataText);
+      if (decision && decision.retryWithFreshSession) {
+        await resetImageSession();
+        await updateStatus({ aiVision: "recovering", aiReason: "The local vision model session expired; recreating it." });
+        session = await getImageSession();
+        if (!session || runId !== currentRun) return;
+        decision = await promptImage(session, candidate.element, candidate.metadataText);
+      }
       if (decision && decision.block) {
         redactImage(candidate.element, {
           ruleName: decision.rule || "AI vision match",
@@ -445,6 +465,7 @@
       });
       return parseJSONResult(result);
     } catch (error) {
+      if (isDestroyedSessionError(error)) return { retryWithFreshSession: true };
       const errorText = formatError(error);
       const isTaint = errorText.includes("SecurityError") || errorText.includes("taint");
       await updateStatus({
@@ -546,6 +567,23 @@
     Promise.resolve(imageSessionPromise).then((session) => session && session.destroy && session.destroy()).catch(() => {});
     textSessionPromise = null;
     imageSessionPromise = null;
+  }
+
+  async function resetTextSession() {
+    const oldSessionPromise = textSessionPromise;
+    textSessionPromise = null;
+    await Promise.resolve(oldSessionPromise).then((session) => session && session.destroy && session.destroy()).catch(() => {});
+  }
+
+  async function resetImageSession() {
+    const oldSessionPromise = imageSessionPromise;
+    imageSessionPromise = null;
+    await Promise.resolve(oldSessionPromise).then((session) => session && session.destroy && session.destroy()).catch(() => {});
+  }
+
+  function isDestroyedSessionError(error) {
+    const text = formatError(error).toLowerCase();
+    return text.includes("invalidstateerror") && (text.includes("destroyed") || text.includes("session"));
   }
 
   function keywordMatch(text, rules) {
