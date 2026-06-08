@@ -89,7 +89,7 @@ Spoilt stores settings in `chrome.storage.sync` and operational memory/status in
 
 ## Release Notes
 
-`1.1.3` makes the popup and options UI more compact. `1.1.2` separated malformed local-model JSON output from true model availability failures and accepts fenced JSON responses. `1.1.1` added recovery for Chrome Prompt API sessions that expire or are destroyed during page scans. `1.1.0` added periodic spoiler memory, labeled image examples, safer VLM image loading, a redesigned redaction-bureau UI, and deterministic adversarial/wild test harnesses. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
+`1.1.4` fixes stale local-AI downloading status after Chrome finishes preparing a model session. `1.1.3` made the popup and options UI more compact. `1.1.2` separated malformed local-model JSON output from true model availability failures and accepts fenced JSON responses. `1.1.1` added recovery for Chrome Prompt API sessions that expire or are destroyed during page scans. `1.1.0` added periodic spoiler memory, labeled image examples, safer VLM image loading, a redesigned redaction-bureau UI, and deterministic adversarial/wild test harnesses. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
 
 ## License
 

@@ -123,7 +123,7 @@ async function refreshMemoryStatus() {
 async function prepareSession({ label, statusKey, fallbackStatus = "unavailable", options }) {
   try {
     const availability = await LanguageModel.availability(options);
-    await updateStatus({ [statusKey]: availability, aiReason: `${capitalize(label)} model availability: ${availability}.` });
+    await updateStatus({ [statusKey]: availability, aiDownload: null, aiReason: `${capitalize(label)} model availability: ${availability}.` });
     if (availability === "unavailable") {
       await updateStatus({
         [statusKey]: fallbackStatus,
@@ -148,7 +148,7 @@ async function prepareSession({ label, statusKey, fallbackStatus = "unavailable"
     }), MODEL_PREPARE_TIMEOUT_MS, `${capitalize(label)} model preparation timed out.`);
 
     if (session && session.destroy) session.destroy();
-    await updateStatus({ [statusKey]: "available", aiReason: `${capitalize(label)} model is ready.` });
+    await updateStatus({ [statusKey]: "available", aiDownload: null, aiReason: `${capitalize(label)} model is ready.` });
     return true;
   } catch (error) {
     await updateStatus({

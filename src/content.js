@@ -531,7 +531,7 @@
       });
       return null;
     }
-    return LanguageModel.create({
+    const session = await LanguageModel.create({
       ...options,
       monitor(monitor) {
         monitor.addEventListener("downloadprogress", (event) => {
@@ -539,6 +539,8 @@
         });
       }
     });
+    await updateStatus({ aiText: "available", aiDownload: null, aiReason: "Text model is ready." });
+    return session;
   }
 
   async function getImageSession() {
@@ -573,7 +575,7 @@
       });
       return null;
     }
-    return LanguageModel.create({
+    const session = await LanguageModel.create({
       ...options,
       monitor(monitor) {
         monitor.addEventListener("downloadprogress", (event) => {
@@ -581,6 +583,8 @@
         });
       }
     });
+    await updateStatus({ aiVision: "available", aiDownload: null, aiReason: "Vision model is ready." });
+    return session;
   }
 
   function resetAI() {

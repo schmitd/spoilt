@@ -290,6 +290,42 @@ def main():
 
         cdp(ws, "Page.navigate", {"url": URL})
         time.sleep(0.8)
+        download_progress_language_model_mock = """
+          window.LanguageModel = {
+            async availability() { return "available"; },
+            async create(options) {
+              if (options && typeof options.monitor === "function") {
+                options.monitor({
+                  addEventListener(name, listener) {
+                    if (name === "downloadprogress") listener({ loaded: 0.42 });
+                  }
+                });
+              }
+              return {
+                async prompt(promptText) {
+                  const snippets = JSON.parse(promptText.match(/Snippets:\\n([\\s\\S]*)$/)[1]);
+                  return JSON.stringify({
+                    decisions: snippets.map((snippet) => ({
+                      i: snippet.i,
+                      block: snippet.text.includes("detective was the ghost"),
+                      rule: "Plot outcome",
+                      reason: "mock post-download session"
+                    }))
+                  });
+                },
+                destroy() {}
+              };
+            }
+          };
+        """
+        inject_extension_stubs(ws, semantic_settings, download_progress_language_model_mock)
+        time.sleep(1.4)
+        post_download_status = eval_js(ws, "window.__spoiltLocalStore['spoilt.status']")
+        if not post_download_status or post_download_status.get("aiText") != "available" or post_download_status.get("aiDownload") is not None:
+            raise AssertionError(f"Download progress should resolve to available: {post_download_status}")
+
+        cdp(ws, "Page.navigate", {"url": URL})
+        time.sleep(0.8)
         malformed_json_language_model_mock = """
           window.LanguageModel = {
             async availability() { return "available"; },
@@ -311,7 +347,7 @@ def main():
         if "Text AI unavailable" in malformed_error or "invalid JSON" not in malformed_reason:
             raise AssertionError(f"Malformed JSON should not be reported as model unavailable: {malformed_status}")
 
-        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts} semantic={semantic_counts} recovery={recovery_counts} malformed={malformed_status}")
+        print(f"e2e_chrome.py passed: initial={counts} rule_change={rule_change_counts} disabled={disabled_counts} semantic={semantic_counts} recovery={recovery_counts} post_download={post_download_status} malformed={malformed_status}")
     finally:
         try:
             chrome.terminate()
