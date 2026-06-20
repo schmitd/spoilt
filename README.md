@@ -2,12 +2,6 @@
 
 Spoilt is a Chrome extension that blacks out user-configured spoilers or unwanted content before you read it. It combines immediate deterministic matching, local Chrome AI when available, and a periodic spoiler-memory loop that searches for fresh details about each configured subject.
 
-## Product Identity
-
-Spoilt now uses a **redaction bureau** identity: stark ink surfaces, dossier-yellow status signals, hard-edged controls, and editorial typography. The interface is intentionally more like an intelligence desk than a generic settings panel because the product promise is vigilance.
-
-The Impeccable-derived design skills (`bolder`, `distill`, `polish`, plus companion critique/delight/quieter skills) were installed locally from `irastorzatobias/design-skills`. Restart Codex to make them auto-trigger in future turns.
-
 ## What It Does
 
 - Lets users define blocking rules with a name, description, and keywords.
@@ -65,14 +59,6 @@ npm run test:unit
 npm run test:e2e
 npm run test:adversarial
 npm run test:wild -- --url "https://news.google.com/search?q=movie%20spoiler"
-```
-
-In this Windows/WSL workspace, Node may be available at:
-
-```bash
-"/mnt/c/Program Files/nodejs/node.exe" tests/shared.test.cjs
-"/mnt/c/Program Files/nodejs/node.exe" tests/memory.test.cjs
-"/mnt/c/Program Files/nodejs/node.exe" tests/manifest.test.cjs
 ```
 
 Package a zip:
