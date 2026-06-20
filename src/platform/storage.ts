@@ -16,7 +16,17 @@ export async function saveSettings(settings: Settings): Promise<void> {
 
 export async function loadStatus(): Promise<ExtensionStatus> {
   const result = await browser.storage.local.get(STATUS_KEY);
-  return normalizeStatus(result[STATUS_KEY] ?? EMPTY_STATUS);
+  const stored = result[STATUS_KEY] ?? EMPTY_STATUS;
+  const status = normalizeStatus(stored);
+  if (
+    stored
+    && typeof stored === "object"
+    && "lastError" in stored
+    && stored.lastError !== status.lastError
+  ) {
+    await browser.storage.local.set({ [STATUS_KEY]: status });
+  }
+  return status;
 }
 
 export async function updateStatus(patch: Partial<ExtensionStatus>): Promise<ExtensionStatus> {

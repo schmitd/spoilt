@@ -3,6 +3,7 @@ import { buildRulesSummary, strictnessGuidance } from "../core/matching";
 import { parseModelJson } from "../core/model-json";
 import { SerialQueue } from "../core/serial-queue";
 import type { Match, Settings, SpoilerMemory } from "../core/types";
+import { withAiLease } from "../platform/ai-lease";
 import { updateStatus } from "../platform/storage";
 import { promptImageInput, type ImageCandidate, type TextCandidate } from "./dom";
 
@@ -32,21 +33,35 @@ export class AiClassifier {
     onMatch: (candidate: TextCandidate, match: Match) => void,
     isCurrent: () => boolean,
   ): Promise<void> {
-    for (let index = 0; index < candidates.length; index += 18) {
-      if (!isCurrent()) return;
-      const batch = candidates.slice(index, index + 18).filter((candidate) => candidate.node.parentNode);
-      if (!batch.length) continue;
-      const decisions = await this.#classifyTextBatch(batch, settings, memory, isCurrent);
-      for (const decision of decisions) {
-        const candidate = batch[decision.i];
-        if (candidate && decision.block && candidate.node.parentNode) {
-          onMatch(candidate, {
-            ruleId: "local-ai",
-            ruleName: decision.rule || "On-device match",
-            reason: decision.reason || "on-device semantic match",
-          });
+    if (!settings.useLocalAI || typeof LanguageModel === "undefined") {
+      await updateStatus({ aiText: "unavailable", aiReason: "Keyword protection is active. On-device analysis is unavailable.", lastError: "" });
+      return;
+    }
+    try {
+      await withAiLease("text", async () => {
+        try {
+          for (let index = 0; index < candidates.length; index += 18) {
+            if (!isCurrent()) return;
+            const batch = candidates.slice(index, index + 18).filter((candidate) => candidate.node.parentNode);
+            if (!batch.length) continue;
+            const decisions = await this.#classifyTextBatch(batch, settings, memory, isCurrent);
+            for (const decision of decisions) {
+              const candidate = batch[decision.i];
+              if (candidate && decision.block && candidate.node.parentNode) {
+                onMatch(candidate, {
+                  ruleId: "local-ai",
+                  ruleName: decision.rule || "On-device match",
+                  reason: decision.reason || "on-device semantic match",
+                });
+              }
+            }
+          }
+        } finally {
+          await this.#resetText();
         }
-      }
+      });
+    } catch (error) {
+      await this.#recordLeaseFailure("text", error);
     }
   }
 
@@ -57,16 +72,30 @@ export class AiClassifier {
     onMatch: (candidate: ImageCandidate, match: Match) => void,
     isCurrent: () => boolean,
   ): Promise<void> {
-    for (const candidate of candidates.slice(0, 12)) {
-      if (!isCurrent() || !candidate.element.isConnected) return;
-      const decision = await this.#classifyImage(candidate, settings, memory, isCurrent);
-      if (decision?.block) {
-        onMatch(candidate, {
-          ruleId: "local-ai-image",
-          ruleName: decision.rule || "On-device image match",
-          reason: decision.reason || "on-device image match",
-        });
-      }
+    if (!settings.useVision || typeof LanguageModel === "undefined") {
+      await updateStatus({ aiVision: "fallback", lastError: "" });
+      return;
+    }
+    try {
+      await withAiLease("image", async () => {
+        try {
+          for (const candidate of candidates.slice(0, 12)) {
+            if (!isCurrent() || !candidate.element.isConnected) return;
+            const decision = await this.#classifyImage(candidate, settings, memory, isCurrent);
+            if (decision?.block) {
+              onMatch(candidate, {
+                ruleId: "local-ai-image",
+                ruleName: decision.rule || "On-device image match",
+                reason: decision.reason || "on-device image match",
+              });
+            }
+          }
+        } finally {
+          await this.#resetImage();
+        }
+      });
+    } catch (error) {
+      await this.#recordLeaseFailure("image", error);
     }
   }
 
@@ -230,6 +259,24 @@ export class AiClassifier {
       session?.destroy();
     });
   }
+
+  async #recordLeaseFailure(kind: "text" | "image", error: unknown): Promise<void> {
+    if (isRecoverableSessionError(error)) {
+      await updateStatus({
+        [kind === "text" ? "aiText" : "aiVision"]: kind === "text" ? "recovering" : "metadata fallback",
+        aiReason: kind === "text"
+          ? "On-device text analysis is busy. Keyword and rule matching remain active while Spoilt retries."
+          : "On-device image analysis is busy. Description matching remains active while Spoilt retries.",
+        lastError: "",
+      });
+      return;
+    }
+    await updateStatus({
+      [kind === "text" ? "aiText" : "aiVision"]: kind === "text" ? "fallback" : "metadata fallback",
+      aiReason: `${kind === "text" ? "Text" : "Image"} analysis is temporarily unavailable. ${formatError(error)}`,
+      lastError: "",
+    });
+  }
 }
 
 async function createSession(kind: "text" | "image"): Promise<LanguageModelSession | null> {
@@ -265,6 +312,8 @@ function isRecoverableSessionError(error: unknown): boolean {
   const text = formatError(error).toLowerCase();
   return text.includes("aborterror")
     || text.includes("request was cancelled")
+    || text.includes("unable to create a session")
+    || text.includes("timed out waiting for on-device analysis")
     || (text.includes("invalidstateerror") && (text.includes("destroyed") || text.includes("session")));
 }
 

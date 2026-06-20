@@ -8,6 +8,9 @@ const { updateStatus } = vi.hoisted(() => ({
 }));
 
 vi.mock("../platform/storage", () => ({ updateStatus }));
+vi.mock("../platform/ai-lease", () => ({
+  withAiLease: vi.fn(async (_kind: string, operation: () => Promise<unknown>) => operation()),
+}));
 vi.mock("wxt/browser", () => ({ browser: { runtime: { sendMessage: vi.fn() } } }));
 
 describe("AiClassifier", () => {

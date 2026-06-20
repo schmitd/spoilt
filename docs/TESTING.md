@@ -33,6 +33,8 @@ The Playwright harness:
 - checks desktop and narrow layouts for horizontal overflow;
 - confirms the content script conceals deterministic and late-injected spoilers;
 - verifies image concealment;
+- verifies only one extension context can use the on-device model at a time;
+- injects a model-session creation failure through Chrome DevTools and confirms it becomes a recoverable, non-persistent state;
 - switches between whiteout and marker treatments;
 - disables protection and confirms all masks are removed;
 - re-enables protection and confirms the page is concealed again;

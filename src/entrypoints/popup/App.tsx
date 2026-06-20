@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { BookOpen, Brain, ExternalLink, RefreshCw, ScanSearch, ShieldCheck, Sparkles } from "lucide-preact";
 import { browser } from "wxt/browser";
 import { Button } from "../../components/Button";
@@ -15,6 +15,7 @@ export function App() {
   const [status, setStatus] = useState<ExtensionStatus>(EMPTY_STATUS);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [message, setMessage] = useState("");
+  const toggleInFlight = useRef(false);
 
   useEffect(() => {
     void Promise.all([loadSettings(), loadStatus()]).then(([nextSettings, nextStatus]) => {
@@ -32,14 +33,20 @@ export function App() {
   }, [masks, settings?.enabled, status.lastError, status.pendingImages, status.pendingText]);
 
   async function toggleEnabled() {
-    if (!settings) return;
+    if (!settings || busy || toggleInFlight.current) return;
+    toggleInFlight.current = true;
     const next = { ...settings, enabled: !settings.enabled };
     setSettings(next);
-    await saveSettings(next);
-    await run("scan", async () => {
-      const response = await sendToActiveTab("scan");
-      if (response.status) setStatus(response.status);
-    });
+    try {
+      await run("scan", async () => {
+        await saveSettings(next);
+        const response = await sendToActiveTab("scan");
+        if (!response.ok) throw new Error(response.error);
+        if (response.status) setStatus(response.status);
+      });
+    } finally {
+      toggleInFlight.current = false;
+    }
   }
 
   async function run(action: Exclude<BusyAction, null>, operation: () => Promise<void>) {
@@ -65,7 +72,7 @@ export function App() {
           <h1>{protectionCopy}</h1>
         </div>
         <label class="switch">
-          <input type="checkbox" checked={settings.enabled} onChange={() => void toggleEnabled()} />
+          <input type="checkbox" checked={settings.enabled} disabled={busy !== null} onChange={() => void toggleEnabled()} />
           <span aria-hidden="true" />
           <span class="sr-only">{settings.enabled ? "Pause protection" : "Enable protection"}</span>
         </label>

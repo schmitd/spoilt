@@ -19,6 +19,7 @@ Spoilt uses:
 - **Typed domain modules** for settings, matching, model JSON, memory, and status.
 - **Typed browser adapters** for storage and messages.
 - **Dedicated services** for local AI and memory refresh.
+- **A background-managed AI lease** so tabs cannot compete for the same on-device model session.
 - **A decomposed content runtime** with candidate collection, redaction, AI classification, and orchestration boundaries.
 
 Effect.ts is intentionally not part of the runtime. The current lifecycle and error model are handled with typed boundaries and small services; adding another runtime would increase bundle and maintenance cost without solving an unmet problem.

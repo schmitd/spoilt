@@ -57,7 +57,9 @@ export function normalizeStatus(value: unknown): ExtensionStatus {
 
 function transientCancellation(value: unknown): boolean {
   const text = String(value ?? "").toLocaleLowerCase();
-  return text.includes("aborterror") || text.includes("request was cancelled");
+  return text.includes("aborterror")
+    || text.includes("request was cancelled")
+    || text.includes("unable to create a session");
 }
 
 function numberValue(value: unknown): number {

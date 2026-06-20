@@ -1,4 +1,5 @@
 import { updateStatus } from "../platform/storage";
+import { withAiLease } from "../platform/ai-lease";
 import type { Settings } from "../core/types";
 
 const PREPARE_TIMEOUT_MS = 120_000;
@@ -19,18 +20,31 @@ export async function prepareLocalAi(settings: Settings): Promise<void> {
     return;
   }
 
-  const textReady = await prepareSession("text", {
-    expectedInputs: [{ type: "text", languages: ["en"] }],
-    expectedOutputs: [{ type: "text", languages: ["en"] }],
-    initialPrompts: [{ role: "system", content: "Classify text against user-defined content boundaries." }],
-  });
+  let textReady = false;
+  try {
+    await withAiLease("prepare", async () => {
+      textReady = await prepareSession("text", {
+        expectedInputs: [{ type: "text", languages: ["en"] }],
+        expectedOutputs: [{ type: "text", languages: ["en"] }],
+        initialPrompts: [{ role: "system", content: "Classify text against user-defined content boundaries." }],
+      });
 
-  if (settings.useVision) {
-    await prepareSession("image", {
-      expectedInputs: [{ type: "text", languages: ["en"] }, { type: "image" }],
-      expectedOutputs: [{ type: "text", languages: ["en"] }],
-      initialPrompts: [{ role: "system", content: "Classify images against user-defined content boundaries." }],
+      if (settings.useVision) {
+        await prepareSession("image", {
+          expectedInputs: [{ type: "text", languages: ["en"] }, { type: "image" }],
+          expectedOutputs: [{ type: "text", languages: ["en"] }],
+          initialPrompts: [{ role: "system", content: "Classify images against user-defined content boundaries." }],
+        });
+      }
     });
+  } catch {
+    await updateStatus({
+      aiText: "recovering",
+      aiVision: settings.useVision ? "metadata fallback" : "fallback",
+      aiReason: "On-device analysis is busy with another page. Spoilt will retry automatically.",
+      lastError: "",
+    });
+    return;
   }
 
   await updateStatus({
@@ -70,6 +84,14 @@ async function prepareSession(kind: "text" | "image", options: LanguageModelCrea
     await updateStatus({ [statusKey]: "available", aiDownload: undefined });
     return true;
   } catch (error) {
+    if (isTransientSessionError(error)) {
+      await updateStatus({
+        [statusKey]: kind === "image" ? "metadata fallback" : "recovering",
+        aiReason: `${kind === "image" ? "Image" : "Text"} analysis is busy. Spoilt will retry automatically.`,
+        lastError: "",
+      });
+      return false;
+    }
     await updateStatus({
       [statusKey]: kind === "image" ? "fallback" : "unavailable",
       aiReason: `${kind === "image" ? "Image" : "Text"} analysis could not be prepared. ${formatError(error)}`,
@@ -88,4 +110,11 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isTransientSessionError(error: unknown): boolean {
+  const text = formatError(error).toLocaleLowerCase();
+  return text.includes("aborterror")
+    || text.includes("request was cancelled")
+    || text.includes("unable to create a session");
 }
