@@ -1,16 +1,22 @@
 {
   "name": "spoilt",
-  "version": "1.1.4",
-  "description": "Chrome extension that blacks out user-configured spoilers and unwanted content using Chrome local inference APIs when available.",
+  "version": "2.0.0",
+  "description": "A privacy-first Chrome extension that creates healthy boundaries around spoilers and unwanted content.",
   "license": "MIT",
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
-    "test": "npm run test:unit && npm run test:e2e && npm run test:adversarial",
-    "test:unit": "node tests/shared.test.cjs && node tests/memory.test.cjs && node tests/manifest.test.cjs",
-    "test:e2e": "python3 tests/e2e_chrome.py",
-    "test:adversarial": "python3 tests/adversarial_harness.py",
-    "test:wild": "python3 tests/wild_harness.py",
-    "package": "zip -r spoilt-extension.zip manifest.json src icons README.md LICENSE docs -x \"*.DS_Store\""
+    "dev": "wxt",
+    "build": "wxt build",
+    "icons": "node scripts/generate-icons.mjs",
+    "zip": "wxt zip",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit && npm run build && npm run test:manifest && npm run test:browser",
+    "test:unit": "vitest run --exclude src/build/manifest.test.ts",
+    "test:manifest": "vitest run src/build/manifest.test.ts",
+    "test:browser": "node tests/extension-smoke.mjs",
+    "test:adversarial": "npm run build && npm run test:browser",
+    "test:release": "npm run typecheck && npm test && npm audit --audit-level=low && npm run zip",
+    "package": "npm run zip"
   },
   "keywords": [
     "chrome-extension",
@@ -18,5 +24,27 @@
     "local-ai",
     "gemini-nano",
     "privacy"
-  ]
+  ],
+  "dependencies": {
+    "@preact/signals": "^2.9.2",
+    "lucide-preact": "^1.21.0",
+    "preact": "^10.29.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@preact/preset-vite": "^2.10.5",
+    "@testing-library/preact": "^3.2.4",
+    "@testing-library/user-event": "^14.6.1",
+    "jsdom": "^29.1.1",
+    "sharp": "^0.34.5",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9",
+    "wxt": "^0.20.26"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "shell-quote": "1.8.4",
+    "tmp": "0.2.7",
+    "uuid": "11.1.1"
+  }
 }

@@ -1,95 +1,77 @@
 # Spoilt
 
-Spoilt is a Chrome extension that blacks out user-configured spoilers or unwanted content before you read it. It combines immediate deterministic matching, local Chrome AI when available, and a periodic spoiler-memory loop that searches for fresh details about each configured subject.
+Spoilt is a privacy-first Chrome extension for creating healthy boundaries around spoilers and unwanted content. It checks visible text and images against user-defined rules, then replaces matching content with tactile whiteout or marker treatments before it is read.
 
-## Product Identity
+## Product Principles
 
-Spoilt now uses a **redaction bureau** identity: stark ink surfaces, dossier-yellow status signals, hard-edged controls, and editorial typography. The interface is intentionally more like an intelligence desk than a generic settings panel because the product promise is vigilance.
+- **Local first:** page content is not sent to a remote server.
+- **Boundaries without alarm:** the interface is calm, explicit, and reversible.
+- **Useful without AI:** keyword and rule-description matching always work.
+- **Progressive enhancement:** Chrome's on-device Prompt API improves semantic text and image matching when available.
+- **Transparent memory:** optional public-news lookups keep active subjects current and store the resulting references locally.
 
-The Impeccable-derived design skills (`bolder`, `distill`, `polish`, plus companion critique/delight/quieter skills) were installed locally from `irastorzatobias/design-skills`. Restart Codex to make them auto-trigger in future turns.
+## Architecture
 
-## What It Does
+Spoilt uses:
 
-- Lets users define blocking rules with a name, description, and keywords.
-- Masks matching text with blacked-out spans.
-- Masks matching images with black placeholder shells.
-- Searches roughly every 12 hours for each rule and stores fresh spoiler details in local extension memory.
-- Stores labeled image examples as metadata, including why each image is likely a spoiler.
-- Adds memory details and image examples to local AI prompts as few-shot context.
-- Uses Chrome local inference for semantic text/image classification when `LanguageModel` is already available.
-- Uses a **Prepare local AI** popup action to trigger model download/preparation from a user gesture.
-- Uses rule names/descriptions and memory terms as conservative fallbacks when local AI is unavailable.
-- Avoids Google Images/cross-origin taint failures by fetching remote image bytes through the extension service worker and passing `Blob` inputs to the local VLM when possible.
-- Sends no page content to a remote server. Periodic memory refresh uses public web/news search results for the configured subjects and stores summaries locally.
+- **WXT** for MV3 manifest generation, entrypoints, builds, and packaging.
+- **Preact + TypeScript** for popup and settings UI.
+- **Typed domain modules** for settings, matching, model JSON, memory, and status.
+- **Typed browser adapters** for storage and messages.
+- **Dedicated services** for local AI and memory refresh.
+- **A decomposed content runtime** with candidate collection, redaction, AI classification, and orchestration boundaries.
 
-## Requirements
-
-- Chrome 138 or newer for text Prompt API support.
-- Image understanding depends on Chrome version/channel and device support for Prompt API image input.
-- Gemini Nano may need to download on first use. Chrome's documentation says the initial model download needs an unmetered connection, and subsequent use does not send data to Google or third parties.
-
-## Install Locally
-
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select this repository folder.
-5. Open Spoilt options and configure your rules.
-6. Click the Spoilt toolbar icon and choose **Prepare local AI** if you want semantic local AI/VLM support.
-
-## Usage
-
-- Click the toolbar icon to enable or disable protection, prepare local AI, refresh memory, rescan the current tab, or open options.
-- Keep memory refresh enabled for subjects where new details appear over time, such as active TV seasons, sports, elections, or game releases.
-- Add specific rules. Good descriptions include what to block and what not to block.
-- Add direct keywords for immediate masking even when Chrome local AI is unavailable.
-
-Example rules:
-
-- `Formula 1 results`: block race winners, podiums, qualifying results, and championship standings.
-- `Movie spoilers`: block endings, character deaths, twists, leaks, and post-credit scene details.
-- `Medical anxiety`: block graphic medical procedure descriptions and images.
+Effect.ts is intentionally not part of the runtime. The current lifecycle and error model are handled with typed boundaries and small services; adding another runtime would increase bundle and maintenance cost without solving an unmet problem.
 
 ## Development
 
-This project has no runtime dependencies. The full test suite uses Node plus Python and Chrome:
+Requirements:
+
+- Node.js 20.12 or newer
+- Chrome 138 or newer for the production extension
+
+Install and start WXT:
 
 ```bash
+npm install
+npm run dev
+```
+
+WXT prints the development output path. Load that unpacked directory from `chrome://extensions` if the browser does not open automatically.
+
+## Build and Test
+
+```bash
+npm run typecheck
 npm test
 ```
 
-Useful targets:
+See [docs/TESTING.md](docs/TESTING.md) for the complete release gates.
+See [docs/RELEASE.md](docs/RELEASE.md) for the store and manual review checklist.
+
+## Package
 
 ```bash
-npm run test:unit
-npm run test:e2e
-npm run test:adversarial
-npm run test:wild -- --url "https://news.google.com/search?q=movie%20spoiler"
+npm run zip
 ```
 
-In this Windows/WSL workspace, Node may be available at:
-
-```bash
-"/mnt/c/Program Files/nodejs/node.exe" tests/shared.test.cjs
-"/mnt/c/Program Files/nodejs/node.exe" tests/memory.test.cjs
-"/mnt/c/Program Files/nodejs/node.exe" tests/manifest.test.cjs
-```
-
-Package a zip:
-
-```bash
-zip -r spoilt-extension.zip manifest.json src icons README.md LICENSE docs
-```
-
-See [docs/TESTING.md](docs/TESTING.md) for the harness strategy.
+WXT writes the Chrome package under `.output/`.
 
 ## Privacy
 
-Spoilt stores settings in `chrome.storage.sync` and operational memory/status in `chrome.storage.local`. It does not include analytics or a remote service. The memory loop fetches public search/news result pages for configured subjects; disable **Refresh spoiler memory from web search** if you want no periodic web lookups.
+Settings are stored in `chrome.storage.sync`. Operational status and recent spoiler knowledge are stored in `chrome.storage.local`.
 
-## Release Notes
+The optional memory feature sends queries derived from configured boundaries to Google News RSS. It does not upload page content. Disable **Keep recent knowledge up to date** to stop periodic public lookups.
 
-`1.1.4` fixes stale local-AI downloading status after Chrome finishes preparing a model session. `1.1.3` made the popup and options UI more compact. `1.1.2` separated malformed local-model JSON output from true model availability failures and accepts fenced JSON responses. `1.1.1` added recovery for Chrome Prompt API sessions that expire or are destroyed during page scans. `1.1.0` added periodic spoiler memory, labeled image examples, safer VLM image loading, a redesigned redaction-bureau UI, and deterministic adversarial/wild test harnesses. Chrome Web Store publication requires creating store listing assets and completing Google's developer account workflow.
+See [PRIVACY.md](PRIVACY.md) for the complete data-use and permission disclosure.
+
+## Loading a Production Build
+
+1. Run `npm run build`.
+2. Open `chrome://extensions`.
+3. Enable **Developer mode**.
+4. Choose **Load unpacked**.
+5. Select `.output/chrome-mv3`.
 
 ## License
 

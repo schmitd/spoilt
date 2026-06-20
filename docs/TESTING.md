@@ -1,26 +1,55 @@
-# Spoilt Test Harness
+# Testing Spoilt
 
-Spoilt uses a layered harness because this extension is both a DOM transformer and an ML-assisted classifier.
+Spoilt uses three release gates.
 
-## Layers
-
-- `npm run test:unit`: pure JavaScript tests for settings, memory parsing, memory merging, and manifest wiring.
-- `npm run test:e2e`: Chrome/CDP browser test that injects the real extension scripts into a controlled fixture.
-- `npm run test:adversarial`: deterministic stress scenarios for hostile web behavior: prompt-injection text, late DOM mutation, memory-only spoilers, and Google Images-style cross-origin image fallback.
-- `npm run test:wild -- --url <url>`: optional live-site smoke scans. This is not run in CI because live sites, bot defenses, and model availability are non-deterministic.
-
-## Why This Mechanism
-
-Chrome's official extension testing guidance points to browser E2E tools such as Puppeteer and Playwright. Playwright's extension docs note that extensions work in Chromium persistent contexts and expose MV3 service workers for testing. That is the right long-term library if this project grows into a full TypeScript test suite.
-
-For this dependency-light repo, the current harness uses Chrome DevTools Protocol directly from Python. That avoids a browser download and still tests the actual browser DOM, mutation observer behavior, storage stubs, and local Prompt API integration shape.
-
-Agentic QA tools such as Browser Use / qa-use are useful for broad exploratory testing, but they require external service/API keys and introduce non-determinism. Spoilt keeps deterministic adversarial tests in CI and leaves live/wild scans as an explicit manual command.
-
-## Wild Scan Example
+## Unit and Component Tests
 
 ```bash
-python3 tests/wild_harness.py --url "https://news.google.com/search?q=movie%20spoiler"
+npm run test:unit
 ```
 
-Read the output as telemetry, not a pass/fail oracle. Live pages change constantly and may block automation.
+Vitest covers settings migration, matching, model-output parsing, spoiler-memory behavior, popup hierarchy, conditional options controls, undo, and saving concealment styles.
+
+## Production Build
+
+```bash
+npm run typecheck
+npm run build
+```
+
+WXT generates the MV3 manifest and all extension entrypoints in `.output/chrome-mv3/`. TypeScript runs in strict mode. The full test command also validates the generated manifest, including the full-tab options page.
+
+## Real Extension Smoke Test
+
+```bash
+npm run test:browser
+```
+
+The Playwright harness:
+
+- launches the production build as an unpacked extension in a persistent Chromium context;
+- discovers the generated extension ID from the service worker;
+- verifies popup and options content in the real extension origin;
+- checks desktop and narrow layouts for horizontal overflow;
+- confirms the content script conceals deterministic and late-injected spoilers;
+- verifies image concealment;
+- switches between whiteout and marker treatments;
+- disables protection and confirms all masks are removed;
+- re-enables protection and confirms the page is concealed again;
+- fails on page exceptions or console errors.
+
+On Windows, run the script with Windows Node to also produce screenshots:
+
+```powershell
+node tests/extension-smoke.mjs
+```
+
+Screenshots are written to `.artifacts/release/`.
+
+## Full Gate
+
+```bash
+npm test
+```
+
+This runs unit/component tests, the production build, and the real extension smoke test.

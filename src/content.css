@@ -1,23 +1,62 @@
 .spoilt-redacted-text {
-  background: #000 !important;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone !important;
+  -webkit-box-decoration-break: clone !important;
   color: transparent !important;
-  cursor: help;
+  cursor: help !important;
+  padding: 0 .14em !important;
   text-shadow: none !important;
+  user-select: none !important;
+}
+
+.spoilt-redacted-text[data-spoilt-style="marker"] {
+  background-color: oklch(31% .045 285) !important;
+  background-image:
+    linear-gradient(93deg, transparent 0 3%, oklch(40% .055 285 / .34) 4% 7%, transparent 8% 72%, oklch(22% .025 285 / .38) 73% 77%, transparent 78%) !important;
+  border-radius: .18em .08em .16em .1em !important;
+  outline: 1px solid oklch(22% .025 285 / .28) !important;
+  outline-offset: -1px !important;
+}
+
+.spoilt-redacted-text[data-spoilt-style="whiteout"],
+.spoilt-redacted-text:not([data-spoilt-style]) {
+  background-color: oklch(98% .018 90) !important;
+  background-image: radial-gradient(circle, oklch(52% .025 90 / .13) .45px, transparent .6px) !important;
+  background-size: 7px 7px !important;
+  border: 1px solid oklch(87% .025 90) !important;
+  border-radius: .12em !important;
+  box-shadow: 0 1px 2px oklch(27% .025 285 / .16) !important;
 }
 
 .spoilt-redacted-text::selection {
-  background: #000 !important;
+  background: inherit !important;
   color: transparent !important;
 }
 
 .spoilt-image-shell {
-  background: #000 !important;
+  contain: paint !important;
   display: inline-block !important;
   line-height: 0 !important;
+  overflow: hidden !important;
   position: relative !important;
   vertical-align: middle !important;
+}
+
+.spoilt-image-shell[data-spoilt-style="marker"] {
+  background-color: oklch(31% .045 285) !important;
+  background-image:
+    radial-gradient(circle at 18% 22%, oklch(47% .055 285 / .25) 0 1px, transparent 1.5px),
+    linear-gradient(96deg, oklch(27% .035 285), oklch(35% .05 285) 48%, oklch(29% .04 285)) !important;
+  border-radius: .35rem .18rem .3rem .22rem !important;
+}
+
+.spoilt-image-shell[data-spoilt-style="whiteout"],
+.spoilt-image-shell:not([data-spoilt-style]) {
+  background-color: oklch(98% .018 90) !important;
+  background-image: radial-gradient(circle, oklch(52% .025 90 / .16) .5px, transparent .7px) !important;
+  background-size: 9px 9px !important;
+  border: 1px solid oklch(87% .025 90) !important;
+  border-radius: .25rem !important;
+  box-shadow: 0 1px 3px oklch(27% .025 285 / .18) !important;
 }
 
 .spoilt-image-shell > img,
@@ -30,22 +69,28 @@
 }
 
 .spoilt-image-shell::after {
-  align-items: center;
-  background: #000;
-  color: #777;
-  content: "Spoilt";
-  display: flex;
-  font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  inset: 0;
-  justify-content: center;
-  letter-spacing: .08em;
-  position: absolute;
-  text-transform: uppercase;
-  z-index: 2147483646;
+  align-items: center !important;
+  color: oklch(44% .025 285) !important;
+  content: "Spoilt · image concealed" !important;
+  display: flex !important;
+  font: 650 12px/1.3 ui-sans-serif, system-ui, sans-serif !important;
+  inset: 0 !important;
+  justify-content: center !important;
+  letter-spacing: 0 !important;
+  padding: 12px !important;
+  position: absolute !important;
+  text-align: center !important;
+  z-index: 2147483646 !important;
+}
+
+.spoilt-image-shell[data-spoilt-style="marker"]::after {
+  color: oklch(91% .012 285) !important;
 }
 
 .spoilt-background-redacted {
-  background: #000 !important;
+  background-color: oklch(98% .018 90) !important;
+  background-image: radial-gradient(circle, oklch(52% .025 90 / .15) .5px, transparent .7px) !important;
+  background-size: 9px 9px !important;
   color: transparent !important;
   position: relative !important;
 }
