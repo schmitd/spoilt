@@ -1,4 +1,10 @@
 node_modules/
+.venv/
+.output/
+.wxt/
+coverage/
+.artifacts/
+.impeccable/
 *.zip
 .DS_Store
 __pycache__/
