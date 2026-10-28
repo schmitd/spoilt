@@ -9,14 +9,15 @@ export class AiClassifier {
 
   async text(candidates: TextCandidate[], settings: Settings, _memory: SpoilerMemory,
     onMatch: (candidate: TextCandidate, match: Match) => void, isCurrent: () => boolean,
-    onBatch?: () => Promise<void>): Promise<void> {
+    onBatch?: () => Promise<void>, onBusy?: (candidates: TextCandidate[]) => void): Promise<void> {
     if (!settings.useLocalAI) return;
     for (let index = 0; index < candidates.length; index += MAX_TEXT_BATCH) {
       if (!isCurrent()) return;
       const batch = candidates.slice(index, index + MAX_TEXT_BATCH).filter((candidate) => candidate.node.parentNode && candidate.text);
       if (!batch.length) continue;
-      const response = await this.#client.request({ kind: "text", texts: batch.map(({ text }) => text.slice(0, MAX_TEXT_LENGTH)) });
+      const response = await this.#client.request({ kind: "text", texts: batch.map(({ text }) => text.slice(0, MAX_TEXT_LENGTH)) }, isCurrent);
       if (!isCurrent()) return;
+      if (!response.ok && response.reason === "busy") onBusy?.(candidates.slice(index));
       if (!response.ok || !("decisions" in response)) return;
       for (const decision of response.decisions) {
         const candidate = batch[decision.i];
@@ -29,14 +30,18 @@ export class AiClassifier {
   }
 
   async images(candidates: ImageCandidate[], settings: Settings, _memory: SpoilerMemory,
-    onMatch: (candidate: ImageCandidate, match: Match) => void, isCurrent: () => boolean): Promise<void> {
-    if (!settings.useLocalAI || !settings.useVision || !await this.visionAvailable() || !isCurrent()) return;
-    for (const candidate of candidates.slice(0, 12)) {
+    onMatch: (candidate: ImageCandidate, match: Match) => void, isCurrent: () => boolean,
+    onBusy?: (candidates: ImageCandidate[]) => void): Promise<void> {
+    if (!settings.useLocalAI || !settings.useVision || !await this.visionAvailable(isCurrent, () => onBusy?.(candidates)) || !isCurrent()) return;
+    for (const [index, candidate] of candidates.slice(0, 12).entries()) {
       if (!isCurrent() || !candidate.element.isConnected) return;
       try {
         const input = await promptImageInput(candidate.element);
         const dataUrl = input ? await imageDataUrl(input) : null;
-        if (dataUrl && isCurrent()) await this.#image(candidate, dataUrl, onMatch, isCurrent);
+        if (dataUrl && isCurrent() && await this.#image(candidate, dataUrl, onMatch, isCurrent)) {
+          onBusy?.(candidates.slice(index));
+          return;
+        }
       } catch { /* Description matching remains active for unreadable image pixels. */ }
     }
   }
@@ -53,20 +58,22 @@ export class AiClassifier {
     }
   }
 
-  async visionAvailable(): Promise<boolean> {
-    const response = await this.#client.request({ kind: "capabilities" });
+  async visionAvailable(isCurrent?: () => boolean, onBusy?: () => void): Promise<boolean> {
+    const response = await this.#client.request({ kind: "capabilities" }, isCurrent);
+    if (!response.ok && response.reason === "busy") onBusy?.();
     return response.ok && "image" in response && response.image;
   }
 
   async reset(): Promise<void> { this.#client.reset(); }
 
   async #image(candidate: ImageCandidate, dataUrl: string,
-    onMatch: (candidate: ImageCandidate, match: Match) => void, isCurrent: () => boolean): Promise<void> {
-    const response = await this.#client.request({ kind: "image", metadata: candidate.metadataText.slice(0, 1000), dataUrl });
+    onMatch: (candidate: ImageCandidate, match: Match) => void, isCurrent: () => boolean): Promise<boolean> {
+    const response = await this.#client.request({ kind: "image", metadata: candidate.metadataText.slice(0, 1000), dataUrl }, isCurrent);
     if (isCurrent() && response.ok && "decision" in response && response.decision?.block) onMatch(candidate, {
       ruleId: "local-ai-image", ruleName: response.decision.rule || "On-device image match",
       reason: response.decision.reason || "on-device image match",
     });
+    return !response.ok && response.reason === "busy";
   }
 }
 
@@ -80,12 +87,24 @@ async function imageDataUrl(input: Element | Blob): Promise<string | null> {
       reader.readAsDataURL(input);
     });
   }
-  if (!(input instanceof HTMLImageElement) || !input.complete || !input.naturalWidth || !input.naturalHeight) return null;
+  let width: number, height: number;
+  if (input instanceof HTMLImageElement) {
+    if (!input.complete) return null;
+    width = input.naturalWidth;
+    height = input.naturalHeight;
+  } else if (input instanceof HTMLCanvasElement) {
+    width = input.width;
+    height = input.height;
+  } else return null;
+  if (!width || !height) return null;
   const canvas = document.createElement("canvas");
-  const scale = Math.min(1, 1024 / Math.max(input.naturalWidth, input.naturalHeight));
-  canvas.width = Math.max(1, Math.round(input.naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(input.naturalHeight * scale));
-  canvas.getContext("2d")?.drawImage(input, 0, 0, canvas.width, canvas.height);
-  const result = canvas.toDataURL("image/jpeg", .85);
-  return result.length <= 2_000_050 ? result : null;
+  const scale = Math.min(1, 1024 / Math.max(width, height));
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.drawImage(input, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob ? imageDataUrl(blob) : null), "image/jpeg", .85);
+  });
 }

@@ -40,6 +40,8 @@ try {
 
   console.log("verify native analysis onboarding and internal boundary");
   await verifyNativeOnboarding(context, extensionId, worker);
+  console.log("verify compact setup migration, minimize and reopen");
+  await verifyCompactSetup(context, extensionId, worker);
   console.log("verify global AI lease");
   await verifyAiLease(context, extensionId, worker);
   console.log("verify recoverable model creation failure");
@@ -60,6 +62,8 @@ try {
   await verifyPreparedKeywords(await context.newPage(), fixturePort, worker, true);
   console.log("verify prepared AI results before first visible frame");
   await verifyPreparedAnalysis(await context.newPage(), fixturePort, worker, extensionId);
+  console.log("verify canvas vision pixels through the native bridge");
+  await verifyCanvasVision(await context.newPage(), fixturePort, worker, extensionId);
 
   console.log(`extension-smoke.mjs passed (${extensionId})`);
   console.log(`screenshots: ${artifactDir}`);
@@ -82,7 +86,10 @@ async function verifyNativeOnboarding(context, extensionId, worker) {
   await engine.waitForURL(`chrome-extension://${extensionId}/analysis.html`);
   await engine.locator('[data-native-host="connected"]').waitFor();
   assert(await engine.getByText(/several gigabytes/).isVisible(), "Download disclosure is missing");
-  assert(await engine.getByText(/Keep this tab open/).first().isVisible(), "Analysis-tab requirement is missing");
+  assert(await engine.getByText(/Keep this Spoilt window open/).first().isVisible(), "Analysis-window lifecycle is missing");
+  const ownWindow = await engine.evaluate(() => chrome.windows.getCurrent());
+  assert.equal(ownWindow.type, "popup", "Prepare did not create a dedicated compact browser window");
+  assert.equal(await engine.locator("#minimize-after-setup").isChecked(), false, "Minimize must be an explicit choice");
   // Opening the page only checks capabilities; this test never consents to a download.
   const count = context.pages().length;
   await popup.getByRole("button", { name: "Prepare on-device analysis", exact: true }).click();
@@ -99,6 +106,70 @@ async function verifyNativeOnboarding(context, extensionId, worker) {
   assert.equal(forgedHostRejected, true, "A popup impersonated the inference document");
   await engine.close();
   await popup.close();
+}
+
+async function verifyCompactSetup(context, extensionId, worker) {
+  await worker.evaluate(async () => {
+    await chrome.storage.sync.set({ "spoilt.settings": { enabled: true, useLocalAI: false,
+      useVision: false, memoryEnabled: false, prefetchLinks: false } });
+  });
+  // Upgrade from an ordinary legacy analysis tab while retaining its live host.
+  const engine = await openMockNativeEngine(context, extensionId);
+  await engine.waitForFunction(() => document.querySelector("#prepare-text").disabled);
+  const legacyWindow = await engine.evaluate(() => chrome.windows.getCurrent());
+  assert.equal(legacyWindow.type, "normal");
+  assert.equal(await engine.locator("#minimize-after-setup").isDisabled(), true);
+  await worker.evaluate(async () => {
+    await chrome.storage.sync.set({ "spoilt.settings": { enabled: true, useLocalAI: true,
+      useVision: true, memoryEnabled: false, prefetchLinks: false } });
+  });
+  await engine.waitForFunction(() => !document.querySelector("#prepare-text").disabled
+    && !document.querySelector("#prepare-image").disabled);
+  assert.equal(await engine.evaluate(() => globalThis.__modelCreates), 0, "Eligibility refresh created a model");
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.getByText("Protection details", { exact: true }).click();
+  await popup.getByRole("button", { name: "Prepare on-device analysis", exact: true }).click();
+  await waitFor(async () => (await engine.evaluate(() => chrome.windows.getCurrent())).type === "popup", 5000, "Legacy analysis tab was not moved into its own window");
+  await engine.waitForFunction(() => !document.querySelector("#minimize-after-setup").disabled);
+  const owned = await engine.evaluate(() => chrome.windows.getCurrent());
+  assert.notEqual(owned.id, legacyWindow.id);
+  await engine.locator("#minimize-after-setup").check();
+  await engine.locator("#prepare-text").click();
+  await engine.getByText(/Ready: a local readiness prompt succeeded/).waitFor();
+  await waitFor(async () => (await worker.evaluate(id => chrome.windows.get(id), owned.id)).state === "minimized", 5000, "Successful opted-in setup did not minimize its own window");
+  assert.notEqual((await worker.evaluate(id => chrome.windows.get(id), legacyWindow.id)).state, "minimized", "Setup minimized the user's normal browsing window");
+  const pageCount = context.pages().length;
+  await popup.getByRole("button", { name: "Prepare on-device analysis", exact: true }).click();
+  await waitFor(async () => (await worker.evaluate(id => chrome.windows.get(id), owned.id)).state === "normal", 5000, "Explicit Prepare did not restore its own window");
+  assert.equal(context.pages().length, pageCount, "Reopen duplicated the inference host");
+  await engine.evaluate(() => { LanguageModel.create = async () => { throw new DOMException("Model is temporarily unavailable", "InvalidStateError"); }; });
+  await engine.locator("#prepare-text").click();
+  await engine.getByText(/Preparation could not be verified/).waitFor();
+  assert.equal((await worker.evaluate(id => chrome.windows.get(id), owned.id)).state, "normal", "Failed setup minimized its window");
+  await engine.close();
+  await popup.close();
+}
+
+async function verifyCanvasVision(page, port, worker, extensionId) {
+  await worker.evaluate(async () => {
+    await chrome.storage.sync.set({ "spoilt.settings": { enabled: true, memoryEnabled: false,
+      prefetchLinks: false, useLocalAI: true, useVision: true, scanText: false, scanImages: true,
+      rules: [{ id: "canvas", name: "Canvas boundary", description: "Synthetic canvas image", keywords: ["nonmatchingplaceholder"], enabled: true }] } });
+  });
+  const engine = await openMockNativeEngine(page.context(), extensionId);
+  await page.bringToFront();
+  await page.goto(`http://127.0.0.1:${port}/canvas/source`);
+  await page.waitForSelector(".spoilt-image-shell #vision-canvas", { state: "attached" });
+  const inputs = await engine.evaluate(() => globalThis.__modelImageInputs);
+  assert.equal(inputs.length, 1, "Canvas did not reach the native extension document exactly once");
+  assert.equal(inputs[0].type, "image/jpeg");
+  assert(inputs[0].bytes > 0 && inputs[0].bytes <= 1_500_000, "Canvas exceeded the image-byte bound");
+  assert.equal(inputs[0].width, 1024); assert.equal(inputs[0].height, 64);
+  assert(inputs[0].pixel[0] > 240 && inputs[0].pixel[1] < 20 && inputs[0].pixel[2] < 20,
+    "Bridge serialization changed the synthetic red canvas pixels");
+  await engine.close();
+  await page.close();
 }
 
 async function verifyPreparedKeywords(page, port, worker, newTab = false) {
@@ -538,6 +609,11 @@ function createFixtureServer(basePath) {
   return createServer(async (request, response) => {
     try {
       const pathname = new URL(request.url || "/", "http://localhost").pathname;
+      if (pathname === "/canvas/source") {
+        response.setHeader("Content-Type", "text/html; charset=utf-8");
+        response.end('<!doctype html><canvas id="vision-canvas" width="2048" height="128" style="width:256px;height:64px" aria-label="Synthetic picture"></canvas><script>const draw=document.querySelector("canvas").getContext("2d");draw.fillStyle="red";draw.fillRect(0,0,2048,128);</script>');
+        return;
+      }
       if (pathname === "/keyword/late-image.svg") {
         response.setHeader("Content-Type", "image/svg+xml");
         setTimeout(() => response.end('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="red"/></svg>'), 300);
@@ -545,7 +621,7 @@ function createFixtureServer(basePath) {
       }
       if (pathname === "/keyword/topic-image.png") {
         response.setHeader("Content-Type", "image/png");
-        response.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0yQAAAAASUVORK5CYII=", "base64"));
+        response.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4z8AAAAMBAQCc479ZAAAAAElFTkSuQmCC", "base64"));
         return;
       }
       if (pathname.startsWith("/keyword/")) {
@@ -559,7 +635,7 @@ function createFixtureServer(basePath) {
       if (pathname === "/prepared/image.png") {
         response.setHeader("Content-Type", "image/png");
         response.setHeader("Cache-Control", "private, max-age=600");
-        response.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0yQAAAAASUVORK5CYII=", "base64"));
+        response.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4z8AAAAMBAQCc479ZAAAAAElFTkSuQmCC", "base64"));
         return;
       }
       if (pathname.startsWith("/prepared/")) {

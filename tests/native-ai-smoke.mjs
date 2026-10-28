@@ -29,8 +29,13 @@ try {
       useLocalAI: true, useVision: false, scanImages: false, scanText: true,
       rules: [{ id: "story", name: "Battle outcomes", description: "Hide whether the captain survives the battle.", keywords: ["nonmatchingplaceholder"], enabled: true }] } });
   });
-  const engine = await context.newPage();
-  await engine.goto(`chrome-extension://${extensionId}/analysis.html`);
+  const opened = context.waitForEvent("page");
+  const ownedWindow = await worker.evaluate(() => chrome.windows.create({
+    url: chrome.runtime.getURL("analysis.html"), type: "popup", width: 480, height: 680, focused: false,
+  }));
+  const engine = await opened;
+  report.analysisWindow = { id: ownedWindow.id, type: ownedWindow.type };
+  await engine.waitForURL(`chrome-extension://${extensionId}/analysis.html`);
   await engine.locator('[data-native-host="connected"]').waitFor();
   report.native = await engine.evaluate(async () => {
     const output = { languageModelType: typeof LanguageModel, secureContext: isSecureContext, inferenceAttempted: false };
@@ -61,7 +66,7 @@ try {
     return output;
   });
   if (!report.native.inferenceAttempted) {
-    report.blocker = `Native model ${report.native.availability || "API missing"} in the extension document. No download requested. Open Spoilt's analysis tab in a supported normal Chrome profile and explicitly prepare the model there.`;
+    report.blocker = `Native model ${report.native.availability || "API missing"} in the extension document. No download requested. Open Spoilt's analysis window in a supported normal Chrome profile and explicitly prepare the model there.`;
     process.exitCode = 2;
   } else {
     assert.equal(report.native.syntheticReply.trim(), "2", "The native synthetic prompt did not produce the expected answer");

@@ -19,7 +19,7 @@ Spoilt uses:
 - **Typed domain modules** for settings, matching, model JSON, memory, and status.
 - **Typed browser adapters** for storage and messages.
 - **Dedicated services** for local AI and memory refresh.
-- **A dedicated extension analysis tab** with authenticated, bounded routing and serialized local model sessions.
+- **A compact extension analysis window** with authenticated, bounded routing, serialized local model sessions, and optional minimization after successful setup.
 - **A decomposed content runtime** with candidate collection, redaction, AI classification, and orchestration boundaries.
 
 Effect.ts is intentionally not part of the runtime. The current lifecycle and error model are handled with typed boundaries and small services; adding another runtime would increase bundle and maintenance cost without solving an unmet problem.
@@ -49,7 +49,7 @@ npm test
 
 See [docs/TESTING.md](docs/TESTING.md) for the complete release gates.
 See [docs/RELEASE.md](docs/RELEASE.md) for the store and manual review checklist.
-See [docs/NATIVE-AI.md](docs/NATIVE-AI.md) for explicit model preparation, hardware requirements, and the analysis tab lifecycle.
+See [docs/NATIVE-AI.md](docs/NATIVE-AI.md) for explicit model preparation, hardware requirements, and the analysis window lifecycle.
 
 ## Package
 

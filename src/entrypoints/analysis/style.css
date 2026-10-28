@@ -1,10 +1,13 @@
 @import "../../styles/tokens.css";
 body { margin: 0; background: var(--color-bg, #f5f3ed); color: var(--color-text, #242622); font-family: system-ui, sans-serif; }
-main { width: min(680px, calc(100% - 48px)); margin: 56px auto; line-height: 1.65; }
+main { width: min(680px, calc(100% - 40px)); margin: 24px auto; line-height: 1.5; }
 .brand { font-weight: 800; letter-spacing: -.04em; font-size: 24px; }
-h1 { font-size: 36px; line-height: 1.2; }
+h1 { font-size: 30px; line-height: 1.2; }
 h2 { font-size: 20px; }
-section { margin: 24px 0; padding: 20px 24px; background: #fff; border: 1px solid #d9dbd3; border-radius: 12px; }
+section { margin: 20px 0; padding: 16px; background: #fff; border: 1px solid #d9dbd3; border-radius: 12px; }
 button { font: inherit; padding: 10px 16px; border: 0; border-radius: 8px; background: #315b44; color: #fff; cursor: pointer; }
 button:disabled { opacity: .55; cursor: default; }
 a { color: #315b44; }
+.window-option { display: flex; align-items: start; gap: 8px; }
+.window-option input { margin: 5px 0 0; }
+.window-state { font-size: 14px; }
