@@ -94,4 +94,98 @@ describe("prepared page analysis", () => {
     await Promise.resolve();
     expect(article.querySelectorAll(".spoilt-redacted-text")).toHaveLength(1);
   });
+  it("reapplies exact full text after hydration splits it across inline nodes", async () => {
+    const text = "The captain quietly survives the battle";
+    const applier = new PreparedTextApplier(new Redactor(), DEFAULT_SETTINGS, {
+      url: location.href, signature: "", createdAt: Date.now(),
+      matches: [{ text, match: { ruleId: "local-ai", ruleName: "Story", reason: "semantic" } }],
+    });
+    document.body.innerHTML = `<h1>${text}</h1>`;
+    applier.start();
+    document.querySelector("h1")!.innerHTML = "<strong>The captain</strong> quietly survives <em>the battle</em>";
+    await Promise.resolve();
+    expect(document.querySelectorAll("h1 .spoilt-redacted-text")).toHaveLength(3);
+    document.querySelector("h1")!.textContent = `${text}, allegedly`;
+    await Promise.resolve();
+    expect(document.querySelector("h1 .spoilt-redacted-text")).toBeNull();
+    applier.stop();
+  });
+  it("retains live decisions for replacement nodes but restores changed safe text", async () => {
+    const text = "The captain quietly survives the battle";
+    const applier = new PreparedTextApplier(new Redactor(), DEFAULT_SETTINGS, {
+      url: location.href, signature: "", createdAt: Date.now(), matches: [],
+    });
+    applier.start();
+    applier.rememberText(text, { ruleId: "local-ai", ruleName: "Story", reason: "semantic" });
+    document.body.innerHTML = `<h1>${text}</h1>`;
+    await Promise.resolve();
+    const mask = document.querySelector("h1 .spoilt-redacted-text")!;
+    expect(mask).toBeTruthy();
+    mask.firstChild!.textContent = "Ordinary safe headline";
+    await Promise.resolve();
+    expect(document.querySelector("h1 .spoilt-redacted-text")).toBeNull();
+    expect(applier.snapshot("rules").matches).toHaveLength(1);
+    applier.stop();
+  });
+  it("handles partial hydration and clears a split decision when the complete text changes", async () => {
+    const text = "The captain quietly survives the battle";
+    const applier = new PreparedTextApplier(new Redactor(), DEFAULT_SETTINGS, {
+      url: location.href, signature: "", createdAt: Date.now(),
+      matches: [{ text, match: { ruleId: "local-ai", ruleName: "Story", reason: "semantic" } }],
+    });
+    document.body.innerHTML = "<div id='headline'><strong>The captain</strong> quietly survives <em>the battle</em></div>";
+    applier.start();
+    document.querySelector("strong")!.textContent = "The captain";
+    await Promise.resolve();
+    expect(document.querySelectorAll("#headline .spoilt-redacted-text")).toHaveLength(3);
+    document.querySelector("em")!.textContent = "a picnic";
+    await Promise.resolve();
+    expect(document.querySelector("#headline .spoilt-redacted-text")).toBeNull();
+    applier.stop();
+  });
+  it("applies direct rules before layout and leaves editable descendants alone", async () => {
+    const settings = { ...DEFAULT_SETTINGS, useLocalAI: false, rules: [{ id: "x", name: "Topic", description: "", keywords: ["exampleterm"], enabled: true }] };
+    const applier = new PreparedTextApplier(new Redactor(), settings, {
+      url: location.href, signature: "", createdAt: Date.now(), matches: [],
+    });
+    applier.start();
+    document.body.innerHTML = '<h1>exampleterm headline</h1><div contenteditable="true"><b>exampleterm editor</b></div>';
+    await Promise.resolve();
+    expect(document.querySelector("h1 .spoilt-redacted-text")).toBeTruthy();
+    expect(document.querySelector("[contenteditable] .spoilt-redacted-text")).toBeNull();
+    applier.stop();
+  });
+  it("rejects stale text snapshots at the point of redaction", () => {
+    const heading = document.createElement("h1");
+    const node = document.createTextNode("An old spoiler snapshot");
+    heading.append(node); document.body.append(heading);
+    node.data = "Safe updated headline";
+    new Redactor().text({ node, text: "An old spoiler snapshot" }, { ruleId: "x", ruleName: "Story", reason: "semantic" }, "whiteout", true);
+    expect(heading.querySelector(".spoilt-redacted-text")).toBeNull();
+  });
+  it("never applies disabled text or image categories from a prepared result", () => {
+    const applier = new PreparedTextApplier(new Redactor(), { ...DEFAULT_SETTINGS, scanText: false, scanImages: false }, {
+      url: location.href, signature: "", createdAt: Date.now(),
+      matches: [{ text: "Known spoiler headline", match: { ruleId: "x", ruleName: "Story", reason: "semantic" } }],
+      images: [{ url: "https://example.com/a.png", alt: "A scene", match: { ruleId: "x", ruleName: "Story", reason: "semantic" } }],
+    });
+    document.body.innerHTML = '<h1>Known spoiler headline</h1><img src="https://example.com/a.png" alt="A scene">';
+    applier.start();
+    expect(document.querySelector(".spoilt-redacted-text,.spoilt-image-shell")).toBeNull();
+    applier.stop();
+  });
+  it("does not carry exact semantic decisions across a query-only route change", async () => {
+    const originalUrl = location.href;
+    const applier = new PreparedTextApplier(new Redactor(), DEFAULT_SETTINGS, {
+      url: originalUrl, signature: "", createdAt: Date.now(),
+      matches: [{ text: "Known spoiler headline", match: { ruleId: "x", ruleName: "Story", reason: "semantic" } }],
+    });
+    applier.start();
+    history.pushState({}, "", "?different-route");
+    document.body.innerHTML = "<h1>Known spoiler headline</h1>";
+    await Promise.resolve();
+    expect(document.querySelector(".spoilt-redacted-text")).toBeNull();
+    applier.stop();
+    history.replaceState({}, "", originalUrl);
+  });
 });

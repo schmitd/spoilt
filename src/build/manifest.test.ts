@@ -11,6 +11,8 @@ describe("generated extension manifest", () => {
     expect(manifest.minimum_chrome_version).toBe("138");
     expect(manifest.background.service_worker).toBe("background.js");
     expect(manifest.content_scripts[0].js).toContain("content-scripts/content.js");
+    expect(manifest.content_scripts[0].run_at).toBe("document_start");
+    expect(manifest.content_scripts[0].css).toContain("content-scripts/content.css");
     expect(manifest.action.default_popup).toBe("popup.html");
     expect(manifest.options_page ?? manifest.options_ui?.page).toBe("options.html");
     expect(manifest.options_ui?.open_in_tab).toBe(true);

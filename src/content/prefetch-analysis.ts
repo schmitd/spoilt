@@ -3,7 +3,7 @@ import { descriptionMatch, keywordMatch, normalizeWhitespace } from "../core/mat
 import { memoryMatch } from "../core/memory";
 import type { Match, Settings, SpoilerMemory } from "../core/types";
 import { AiClassifier } from "./ai-classifier";
-import { imageMetadata, imageSourceUrls, Redactor, type TextCandidate } from "./dom";
+import { imageMetadata, imageSourceUrls, isSpoiltNode, Redactor, shouldSkipElement, type TextCandidate } from "./dom";
 
 export interface CachedAnalysis {
   url: string;
@@ -11,7 +11,10 @@ export interface CachedAnalysis {
   createdAt: number;
   matches: Array<{ text: string; match: Match; ai?: boolean }>;
   images?: Array<{ url: string; alt: string; match: Match; ai?: boolean }>;
+  kind?: "live";
 }
+
+const INLINE_CONTAINERS = "h1,h2,h3,h4,h5,h6,p,li,a,figcaption,div,span";
 
 export function analysisSignature(settings: Settings, memory: SpoilerMemory): string {
   return JSON.stringify({ rules: settings.rules, strictness: settings.strictness,
@@ -156,35 +159,100 @@ export class PreparedTextApplier {
   #redactor: Redactor;
   #images = new Map<string, { alt: string; match: Match; ai: boolean }>();
   #settings: Settings;
+  #memory: SpoilerMemory;
+  #url = location.href;
+  #inlineValues = new WeakMap<Element, string>();
 
-  constructor(redactor: Redactor, settings: Settings, analysis: CachedAnalysis) {
+  constructor(redactor: Redactor, settings: Settings, analysis: CachedAnalysis, memory: SpoilerMemory = { version: 1, enabled: false, lastUpdatedAt: "", lastError: "", entries: [], imageExamples: [], ruleRuns: {} }) {
     this.#redactor = redactor;
     this.#settings = settings;
-    for (const item of analysis.matches) this.#matches.set(item.text, { match: item.match, ai: item.ai !== false });
-    for (const item of analysis.images ?? []) this.#images.set(item.url, { alt: item.alt, match: item.match, ai: item.ai !== false });
+    this.#memory = memory;
+    for (const item of analysis.matches.slice(0, 700)) this.#matches.set(normalizeWhitespace(item.text), { match: item.match, ai: item.ai !== false });
+    for (const item of (analysis.images ?? []).slice(0, 300)) this.#images.set(item.url, { alt: item.alt, match: item.match, ai: item.ai !== false });
   }
 
   start(): void {
-    if ((!this.#matches.size && !this.#images.size) || !document.documentElement) return;
+    if (this.#observer || !this.#settings.enabled) return;
     this.#observer = new MutationObserver((records) => {
+      if (location.href !== this.#url) return;
       for (const record of records) {
+        let parent = record.target instanceof Element ? record.target : record.target.parentElement;
+        while (parent) {
+          const original = this.#inlineValues.get(parent);
+          if (original && original !== normalizeWhitespace(parent.textContent)) {
+            this.#inlineValues.delete(parent);
+            this.#redactor.restoreTextWithin(parent);
+            this.#apply(parent);
+            break;
+          }
+          parent = parent.parentElement;
+        }
+        if (parent) continue;
+        const current = this.#redactor.restoreChanged(record.target);
+        if (current !== record.target) { this.#apply(current); continue; }
+        if (isSpoiltNode(record.target)) continue;
         if (record.type === "characterData" || record.type === "attributes") this.#apply(record.target);
         else for (const node of record.addedNodes) this.#apply(node);
       }
     });
-    this.#observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-srcset", "alt"] });
-    this.#apply(document.documentElement);
+    // Observe the Document so replacing body or the root during hydration cannot
+    // detach protection. Mutation callbacks run before the next rendering step.
+    this.#observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-srcset", "alt", "title", "poster", "hidden", "aria-hidden", "class", "style"] });
+    this.apply();
   }
 
   stop(): void { this.#observer?.disconnect(); this.#observer = null; }
 
+  apply(): void { if (location.href === this.#url && document.documentElement) this.#apply(document.documentElement); }
+
+  rememberText(text: string, match: Match, ai = true): void {
+    const key = normalizeWhitespace(text);
+    if (location.href !== this.#url || !key || key.length > 4000) return;
+    if (!this.#matches.has(key) && this.#matches.size >= 700) this.#matches.delete(this.#matches.keys().next().value!);
+    this.#matches.set(key, { match, ai });
+    this.apply();
+  }
+
+  rememberImage(element: Element, match: Match, ai = true): void {
+    const image = element instanceof HTMLImageElement ? element : element.querySelector("img");
+    if (!image || location.href !== this.#url) return;
+    for (const url of imageSourceUrls(image, location.href)) {
+      if (!this.#images.has(url) && this.#images.size >= 300) this.#images.delete(this.#images.keys().next().value!);
+      this.#images.set(url, { alt: image.alt, match, ai });
+    }
+  }
+
+  snapshot(signature: string): CachedAnalysis {
+    return { url: this.#url, signature, createdAt: Date.now(), kind: "live",
+      matches: [...this.#matches].map(([text, result]) => ({ text, ...result })),
+      images: [...this.#images].map(([url, result]) => ({ url, ...result })) };
+  }
+
+  #match(text: string) {
+    const cached = this.#matches.get(text);
+    if (cached) return cached;
+    const match = keywordMatch(text, this.#settings.rules)
+      || memoryMatch(text, this.#settings.rules, this.#memory)
+      || descriptionMatch(text, this.#settings.rules);
+    return match ? { match, ai: false } : undefined;
+  }
+
   #apply(root: Node): void {
-    if (root.nodeType === Node.TEXT_NODE) { this.#text(root as Text); return; }
+    if (isSpoiltNode(root)) return;
+    if (root.nodeType === Node.TEXT_NODE) {
+      if (this.#inlineAround(root.parentElement)) return;
+      this.#text(root as Text); return;
+    }
     if (root.nodeType !== Node.ELEMENT_NODE) return;
+    if (shouldSkipElement(root as Element)) return;
+    this.#inlineAround(root as Element);
     if (root instanceof HTMLImageElement) this.#image(root);
     if (root instanceof Element) {
       root.querySelectorAll<HTMLImageElement>("img").forEach((image) => this.#image(image));
       if (root instanceof HTMLSourceElement) root.closest("picture")?.querySelectorAll<HTMLImageElement>("img").forEach((image) => this.#image(image));
+    }
+    if (this.#settings.scanText) {
+      for (const element of (root as Element).querySelectorAll(INLINE_CONTAINERS)) this.#inline(element);
     }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const nodes: Text[] = [];
@@ -193,7 +261,12 @@ export class PreparedTextApplier {
   }
 
   #image(element: HTMLImageElement): void {
-    if (element.closest(".spoilt-image-shell")) return;
+    if (!this.#settings.scanImages || shouldSkipElement(element)) return;
+    const direct = this.#match(imageMetadata(element));
+    if (direct && !direct.ai) {
+      this.#redactor.image({ element: element.closest("picture") ?? element, metadataText: imageMetadata(element) }, direct.match, this.#settings.redactionStyle);
+      return;
+    }
     for (const source of imageSourceUrls(element, location.href)) {
       const result = this.#images.get(source);
       if (result && result.alt === element.alt) {
@@ -206,9 +279,36 @@ export class PreparedTextApplier {
 
   #text(node: Text): void {
     const parent = node.parentElement;
-    if (!parent || parent.closest('script,style,noscript,template,textarea,input,select,option,code,pre,kbd,samp,[contenteditable],.spoilt-redacted-text')) return;
+    if (!this.#settings.scanText || !parent || shouldSkipElement(parent)) return;
     const text = normalizeWhitespace(node.data);
-    const result = this.#matches.get(text);
+    if (text.length < 4) return;
+    const result = this.#match(text);
     if (result) this.#redactor.text({ node, text }, result.match, this.#settings.redactionStyle, result.ai);
+  }
+
+  #inline(element: Element): boolean {
+    if (!this.#settings.scanText || shouldSkipElement(element)
+      || element.querySelector('h1,h2,h3,h4,h5,h6,p,li,div,section,article,main,table,form,input,textarea,select,[contenteditable],script,style')) return false;
+    const text = normalizeWhitespace(element.textContent);
+    if (text.length < 4 || text.length > 4000) return false;
+    const result = this.#match(text);
+    if (!result) return false;
+    this.#inlineValues.set(element, text);
+    // Exact full inline text tolerates framework splitting into emphasis/link
+    // nodes. Never reuse a semantic decision for a substring or a whole article.
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text);
+    for (const node of nodes) if (node.data.trim() && node.parentElement && !shouldSkipElement(node.parentElement)) {
+      this.#redactor.text({ node, text: normalizeWhitespace(node.data) }, result.match, this.#settings.redactionStyle, result.ai);
+    }
+    return true;
+  }
+
+  #inlineAround(element: Element | null): boolean {
+    for (let parent = element; parent && parent !== document.body; parent = parent.parentElement) {
+      if (parent.matches(INLINE_CONTAINERS) && this.#inline(parent)) return true;
+    }
+    return false;
   }
 }

@@ -49,3 +49,16 @@ held in Chrome session storage and scoped to the source tab and tabs opened
 from it for the same destination. Decisions expire after 60 seconds and are scheduled for removal; the underlying image bytes are not stored
 there. Session data is cleared when Chrome exits. `no-store` responses are not pre-analyzed. Turn the setting or protection
 off to stop prefetching.
+
+## Live Decision Reuse
+
+Positive decisions made by on-device analysis on the current page are retained in
+content-script memory so hydration can replace DOM nodes without exposing known
+matches again. Up to 700 exact text fragments and 300 image-source decisions, the
+exact page URL, and the rule context are also held in trusted Chrome session
+storage for up to 60 seconds to protect same-tab reloads. Query strings and hashes
+are part of this identity. These entries are scheduled for removal, cleared on
+browser exit and tab closure, and ignored after settings or recent knowledge
+change. A route change discards the active in-memory decisions. This happens
+independently of the optional link-prefetch setting, requires no new permissions,
+and sends no content to a server. Image bytes are not retained in this cache.

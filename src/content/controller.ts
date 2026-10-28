@@ -26,34 +26,40 @@ export class ContentController {
   #run = 0;
   #scanRequested = false;
   #scanPromise: Promise<void> | null = null;
+  #url = location.href;
+  #saveTimer = 0;
+  #configuration = 0;
+  #starting = true;
+  #configurationChanged = false;
 
   async start(): Promise<void> {
-    const cachePromise = Promise.race([
-      browser.runtime.sendMessage({ scope: "spoilt", type: "getPrefetchAnalysis" }).catch(() => null) as Promise<CachedAnalysis | null>,
-      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 300)),
-    ]);
-    this.#settings = await loadSettings();
-    this.#prefetcher.setEnabled(this.#settings.enabled && this.#settings.prefetchLinks);
-    this.#memory = await loadMemory();
-    const analysis = await cachePromise;
-    if (analysis && this.#settings.enabled && this.#settings.prefetchLinks && (this.#settings.scanText || this.#settings.scanImages)
-      && analysis.signature === analysisSignature(this.#settings, this.#memory) && Array.isArray(analysis.matches)) {
-      this.#prepared = new PreparedTextApplier(this.#redactor, this.#settings, analysis);
-      this.#prepared.start();
-    }
     browser.runtime.onMessage.addListener((message: unknown) => this.#handleMessage(message));
     browser.storage.onChanged.addListener((changes, area) => {
-      if (area === "sync" && changes["spoilt.settings"]) {
-        void this.#reloadSettings();
-      }
-      if (area === "local" && changes[MEMORY_KEY]) {
-        this.#prepared?.stop();
-        this.#prepared = null;
-        this.#memory = normalizeMemory(changes[MEMORY_KEY].newValue as Partial<SpoilerMemory>);
-        this.#collector.reset();
-        this.schedule();
-      }
+      if (!((area === "sync" && changes["spoilt.settings"]) || (area === "local" && changes[MEMORY_KEY]))) return;
+      if (this.#starting) this.#configurationChanged = true;
+      else void this.#reloadSettings();
     });
+    const cachePromise = Promise.race([
+      browser.runtime.sendMessage({ scope: "spoilt", type: "getPrefetchAnalysis" }).catch(() => null) as Promise<CachedAnalysis[] | CachedAnalysis | null>,
+      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 300)),
+    ]);
+    let analysis: CachedAnalysis[] | CachedAnalysis | null;
+    do {
+      this.#configurationChanged = false;
+      const [settings, memory, cached] = await Promise.all([loadSettings(), loadMemory(), cachePromise]);
+      this.#settings = settings;
+      this.#memory = memory;
+      analysis = cached;
+    } while (this.#configurationChanged);
+    this.#starting = false;
+    this.#url = location.href;
+    this.#prefetcher.setEnabled(this.#settings.enabled && this.#settings.prefetchLinks);
+    this.#protect(analysis);
+    // Navigation API covers pushState/replaceState without injecting or patching
+    // page-world JavaScript. Mutation checks and history events are fallbacks.
+    (window as Window & { navigation?: EventTarget }).navigation?.addEventListener("currententrychange", this.#checkRoute);
+    window.addEventListener("popstate", this.#checkRoute);
+    window.addEventListener("hashchange", this.#checkRoute);
     if (this.#settings.enabled) {
       this.#observe();
       this.schedule(50);
@@ -86,6 +92,7 @@ export class ContentController {
   }
 
   async #scanOnce(): Promise<void> {
+    this.#checkRoute();
     if (!this.#settings.enabled) {
       this.#redactor.clear(this.#collector);
       await updateStatus({ enabled: false, counters: this.#redactor.counters, pendingText: 0, pendingImages: 0 });
@@ -95,6 +102,9 @@ export class ContentController {
     const memory = this.#memory;
     const run = ++this.#run;
     const signature = this.#signature(settings, memory);
+    const configuration = this.#configuration;
+    const url = this.#url;
+    const isCurrent = () => run === this.#run && configuration === this.#configuration && url === location.href;
     const textCandidates = settings.scanText ? this.#collector.collectText(settings, signature) : [];
     const imageCandidates = settings.scanImages ? this.#collector.collectImages(settings, signature) : [];
     const aiText = [];
@@ -121,13 +131,20 @@ export class ContentController {
 
     if (settings.useLocalAI && aiText.length) {
       await this.#ai.text(aiText, settings, memory, (candidate, match) => {
-        this.#redactor.text(candidate, match, settings.redactionStyle, true);
-      }, () => run === this.#run);
+        if (!isCurrent()) return;
+        // Retain the decision even when hydration detached the original node;
+        // apply only to the exact classified text on this route.
+        this.#prepared?.rememberText(candidate.text, match);
+        this.#saveDecisions();
+      }, isCurrent);
     }
     if (settings.useLocalAI && settings.useVision && aiImages.length) {
       await this.#ai.images(aiImages, settings, memory, (candidate, match) => {
+        if (!isCurrent() || imageMetadata(candidate.element) !== candidate.metadataText) return;
+        this.#prepared?.rememberImage(candidate.element, match);
         this.#redactor.image(candidate, match, settings.redactionStyle, true);
-      }, () => run === this.#run);
+        this.#saveDecisions();
+      }, isCurrent);
     }
     if (run === this.#run) {
       await updateStatus({ counters: this.#redactor.counters, pendingText: 0, pendingImages: 0 });
@@ -135,13 +152,22 @@ export class ContentController {
   }
 
   async #reloadSettings(): Promise<void> {
+    const configuration = ++this.#configuration;
+    const previous = this.#settings && this.#prepared?.snapshot(analysisSignature(this.#settings, this.#memory));
+    this.#prefetcher.setEnabled(false);
+    this.#run += 1;
+    window.clearTimeout(this.#saveTimer);
+    this.#saveTimer = 0;
     this.#prepared?.stop();
     this.#prepared = null;
-    this.#settings = await loadSettings();
+    const [settings, memory] = await Promise.all([loadSettings(), loadMemory()]);
+    if (configuration !== this.#configuration) return;
+    this.#settings = settings;
+    this.#memory = memory;
     this.#prefetcher.setEnabled(this.#settings.enabled && this.#settings.prefetchLinks);
-    this.#run += 1;
-    await this.#ai.reset();
+    void this.#ai.reset();
     this.#redactor.clear(this.#collector);
+    this.#protect(previous ?? null);
     if (this.#settings.enabled) {
       this.#observe();
       this.schedule(50);
@@ -160,6 +186,7 @@ export class ContentController {
   #observe(): void {
     if (this.#observer) return;
     this.#observer = new MutationObserver((mutations) => {
+      this.#checkRoute();
       const relevant = mutations.filter((mutation) => (
         !isSpoiltNode(mutation.target)
         && (mutation.type === "characterData" || mutation.type === "attributes" || [...mutation.addedNodes].some((node) => !isSpoiltNode(node)))
@@ -168,8 +195,8 @@ export class ContentController {
       this.#redactChanges(relevant);
       this.schedule();
     });
-    this.#observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true,
-      attributes: true, attributeFilter: ["src", "srcset", "alt", "title", "poster", "data-src", "data-srcset"],
+    this.#observer.observe(document, { childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: ["src", "srcset", "alt", "title", "poster", "data-src", "data-srcset", "hidden", "aria-hidden", "class", "style"],
     });
     document.addEventListener("load", this.#imageLoaded, true);
   }
@@ -227,6 +254,44 @@ export class ContentController {
     document.removeEventListener("load", this.#imageLoaded, true);
   }
 
+  #protect(analyses: CachedAnalysis[] | CachedAnalysis | null): void {
+    this.#prepared?.stop();
+    this.#prepared = null;
+    if (!this.#settings.enabled) return;
+    const signature = analysisSignature(this.#settings, this.#memory);
+    const candidates = Array.isArray(analyses) ? analyses : analyses ? [analyses] : [];
+    const analysis = candidates.find((analysis) => (analysis.kind === "live" || this.#settings.prefetchLinks)
+      && analysis.url === location.href && analysis.signature === signature
+      && Date.now() - analysis.createdAt >= 0 && Date.now() - analysis.createdAt <= 60_000
+      && Array.isArray(analysis.matches));
+    this.#prepared = new PreparedTextApplier(this.#redactor, this.#settings,
+      analysis ?? { url: location.href, signature, createdAt: Date.now(), matches: [] }, this.#memory);
+    this.#prepared.start();
+  }
+
+  #checkRoute = (): void => {
+    if (location.href === this.#url || !this.#settings) return;
+    this.#url = location.href;
+    this.#run += 1;
+    window.clearTimeout(this.#saveTimer);
+    this.#saveTimer = 0;
+    this.#prepared?.stop();
+    this.#redactor.clear(this.#collector);
+    this.#protect(null);
+    this.schedule(0);
+  };
+
+  #saveDecisions(): void {
+    if (this.#saveTimer) return;
+    const configuration = this.#configuration;
+    this.#saveTimer = window.setTimeout(() => {
+      this.#saveTimer = 0;
+      if (configuration !== this.#configuration || this.#url !== location.href || !this.#prepared) return;
+      const analysis = this.#prepared.snapshot(analysisSignature(this.#settings, this.#memory));
+      void browser.runtime.sendMessage({ scope: "spoilt", type: "savePageAnalysis", analysis }).catch(() => undefined);
+    }, 100);
+  }
+
   #signature(settings: Settings, memory: SpoilerMemory): string {
     return JSON.stringify({
       strictness: settings.strictness,
@@ -243,9 +308,7 @@ export class ContentController {
   async #handleMessage(message: unknown): Promise<unknown> {
     if (!isMessage(message)) return { ok: false, error: "Unknown message." };
     if (message.type === "scan") {
-      this.#settings = await loadSettings();
-      this.#prefetcher.setEnabled(this.#settings.enabled && this.#settings.prefetchLinks);
-      this.#memory = await loadMemory();
+      await this.#reloadSettings();
       await this.scan();
       return { ok: true, status: await this.#status() };
     }

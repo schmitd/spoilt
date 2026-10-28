@@ -2,6 +2,26 @@ html[data-spoilt-preparing] {
   opacity: 0 !important;
 }
 
+.spoilt-preparation-notice {
+  position: fixed !important;
+  top: 12px !important;
+  right: 12px !important;
+  max-width: 360px !important;
+  padding: 12px !important;
+  background: #fff8e7 !important;
+  color: #24212a !important;
+  border: 1px solid #8b754d !important;
+  border-radius: 6px !important;
+  font: 14px/1.4 system-ui, sans-serif !important;
+  z-index: 2147483647 !important;
+}
+
+.spoilt-preparation-notice button {
+  color: #24212a !important;
+  font: inherit !important;
+  cursor: pointer !important;
+}
+
 .spoilt-redacted-text {
   box-decoration-break: clone !important;
   -webkit-box-decoration-break: clone !important;

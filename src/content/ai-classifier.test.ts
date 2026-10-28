@@ -56,4 +56,23 @@ describe("AiClassifier", () => {
       typeof patch.lastError === "string" && patch.lastError.includes("AbortError")
     ))).toBe(false);
   });
+
+  it("discards a response when its page or configuration changed during the prompt", async () => {
+    let finish!: (value: string) => void;
+    const prompt = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    vi.stubGlobal("LanguageModel", {
+      availability: async () => "available",
+      create: async () => ({ prompt, destroy: vi.fn() }),
+    });
+    document.body.innerHTML = "<p>An old spoiler snapshot</p>";
+    const node = document.querySelector("p")!.firstChild as Text;
+    let current = true;
+    const onMatch = vi.fn();
+    const work = new AiClassifier().text([{ node, text: node.data }], DEFAULT_SETTINGS, normalizeMemory(), onMatch, () => current);
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledOnce());
+    current = false;
+    finish('{"decisions":[{"i":0,"block":true,"rule":"Story"}]}');
+    await work;
+    expect(onMatch).not.toHaveBeenCalled();
+  });
 });

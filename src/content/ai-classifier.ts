@@ -46,6 +46,7 @@ export class AiClassifier {
             const batch = candidates.slice(index, index + 18).filter((candidate) => candidate.node.parentNode);
             if (!batch.length) continue;
             const decisions = await this.#classifyTextBatch(batch, settings, memory, isCurrent);
+            if (!isCurrent()) return;
             for (const decision of decisions) {
               const candidate = batch[decision.i];
               if (candidate && decision.block && candidate.node.parentNode) {
@@ -84,7 +85,7 @@ export class AiClassifier {
           for (const candidate of candidates.slice(0, 12)) {
             if (!isCurrent() || !candidate.element.isConnected) return;
             const decision = await this.#classifyImage(candidate, settings, memory, isCurrent);
-            if (decision?.block) {
+            if (decision?.block && isCurrent()) {
               onMatch(candidate, {
                 ruleId: "local-ai-image",
                 ruleName: decision.rule || "On-device image match",

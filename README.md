@@ -117,3 +117,33 @@ not allow their HTML to be cached still rely on normal page scanning. It cannot
 guarantee concealment before every frame. Navigation remains native, and cache
 reuse depends on server cache headers, `Vary`, and browser policy. The response
 limit bounds bytes read by Spoilt, not bytes already buffered by Chrome.
+
+### Hydration and live decisions
+
+Direct rules and exact prepared decisions are reapplied in mutation callbacks,
+independently of the serialized AI scan. A framework may replace the text nodes,
+split an exact headline across inline markup, or replace the document body without
+losing a known decision. Live AI decisions also enter this same reapplication path.
+The extension does not reuse semantic decisions for substrings or whole articles.
+Changed text and image metadata are checked again; delayed AI responses cannot
+conceal a different snapshot or a different route.
+
+Live positive decisions are kept in memory for the current page and in trusted
+Chrome session storage for up to 60 seconds for a reload of that exact URL in the
+same tab. The URL includes its query and hash. The cache holds at most 700 text
+decisions and 300 image-source decisions per tab, and is invalidated by boundary,
+analysis-mode, or recent-knowledge changes. SPA route changes discard the active
+decisions. Live reuse does not enable link prefetching or make network requests.
+
+The initial page cover has a 500 ms deadline. If startup is still pending, the page
+becomes usable with a dismissible notice that unchecked content may be visible.
+Startup failure also produces a notice. New semantic content without a valid
+prepared/live decision still needs on-device analysis and can appear before its
+result. Expired caches, unsupported browser pages, shadow DOM, canvas text,
+cross-origin frames, page scripts that change content during rendering, and sites
+that override concealment styles are outside the no-exposure cases tested here.
+
+Run `npm run test:hydration` after building for frame samples covering known
+decisions, split-node hydration, a busy model, reloads, cache expiry, route changes,
+stale AI results, and direct-rule mutations. The synthetic model is deliberately
+slow; this tests extension timing, not the native model's classification accuracy.

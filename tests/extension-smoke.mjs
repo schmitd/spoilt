@@ -181,6 +181,14 @@ async function verifyPreparedAnalysis(page, port, worker, extensionId) {
     console.log("prefetch diagnostics", await worker.evaluate(async () => ({ session: await chrome.storage.session.get(null), local: await chrome.storage.local.get("spoilt.status") })));
     throw error;
   }
+  await worker.evaluate(async () => {
+    const entries = await chrome.storage.session.get(null);
+    for (const [key, value] of Object.entries(entries)) if (key.startsWith("spoilt.prefetch.") && value?.url?.endsWith("/prepared/target")) {
+      await chrome.storage.session.set({ [key.replace("spoilt.prefetch.", "spoilt.page.")]: {
+        ...value, kind: "live", signature: "outdated rule context", createdAt: Date.now(),
+      } });
+    }
+  });
   await page.locator("#target").click();
   await page.waitForURL(`http://127.0.0.1:${port}/prepared/target`);
   await page.waitForSelector("h1 .spoilt-redacted-text");

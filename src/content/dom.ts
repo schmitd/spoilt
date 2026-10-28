@@ -67,9 +67,13 @@ export class CandidateCollector {
 
 export class Redactor {
   counters: ScanCounters = { text: 0, images: 0, aiText: 0, aiImages: 0 };
+  #textValues = new WeakMap<Element, string>();
+  #imageValues = new WeakMap<Element, string>();
 
   text(candidate: TextCandidate, match: Match, style: RedactionStyle, ai = false): void {
-    if (!candidate.node.parentNode || !candidate.node.nodeValue) return;
+    const parent = candidate.node.parentElement;
+    if (!candidate.node.isConnected || !parent || shouldSkipElement(parent)
+      || normalizeWhitespace(candidate.node.data) !== candidate.text || !candidate.node.nodeValue) return;
     const span = document.createElement("span");
     span.className = MASKED_TEXT_CLASS;
     span.textContent = candidate.node.nodeValue;
@@ -77,7 +81,8 @@ export class Redactor {
     span.setAttribute("aria-label", "Spoilt concealed content");
     span.dataset.spoiltReason = match.reason;
     span.dataset.spoiltStyle = style;
-    candidate.node.parentNode.replaceChild(span, candidate.node);
+    parent.replaceChild(span, candidate.node);
+    this.#textValues.set(span, normalizeWhitespace(span.textContent));
     this.counters.text += 1;
     if (ai) this.counters.aiText += 1;
   }
@@ -98,6 +103,7 @@ export class Redactor {
     }
     element.parentNode.insertBefore(shell, element);
     shell.appendChild(element);
+    this.#imageValues.set(shell, imageMetadata(element));
     this.counters.images += 1;
     if (ai) this.counters.aiImages += 1;
   }
@@ -118,6 +124,28 @@ export class Redactor {
     });
     collector.reset();
     this.counters = { text: 0, images: 0, aiText: 0, aiImages: 0 };
+  }
+
+  restoreChanged(node: Node): Node {
+    const element = node instanceof Element ? node : node.parentElement;
+    const textMask = element?.closest(`.${MASKED_TEXT_CLASS}`);
+    if (textMask && this.#textValues.get(textMask) !== normalizeWhitespace(textMask.textContent)) {
+      const parent = textMask.parentElement;
+      textMask.replaceWith(...textMask.childNodes);
+      return parent ?? node;
+    }
+    const imageMask = element?.closest(`.${IMAGE_SHELL_CLASS}`);
+    const image = imageMask?.firstElementChild;
+    if (imageMask && image && this.#imageValues.get(imageMask) !== imageMetadata(image)) {
+      const parent = imageMask.parentElement;
+      imageMask.replaceWith(...imageMask.childNodes);
+      return parent ?? node;
+    }
+    return node;
+  }
+
+  restoreTextWithin(element: Element): void {
+    for (const span of element.querySelectorAll(`.${MASKED_TEXT_CLASS}`)) span.replaceWith(...span.childNodes);
   }
 }
 
@@ -148,10 +176,7 @@ export async function promptImageInput(element: Element): Promise<Element | Blob
 
 export function shouldSkipElement(element: Element): boolean {
   if (element.closest(`.${MASKED_TEXT_CLASS}, .${IMAGE_SHELL_CLASS}, .${BACKGROUND_CLASS}`)) return true;
-  const tag = element.tagName.toLowerCase();
-  return ["script", "style", "noscript", "template", "textarea", "input", "select", "option", "code", "pre", "kbd", "samp"].includes(tag)
-    || (element instanceof HTMLElement && element.isContentEditable)
-    || element.getAttribute("aria-hidden") === "true";
+  return Boolean(element.closest('head,script,style,noscript,template,textarea,input,select,option,code,pre,kbd,samp,[data-spoilt-ui],[contenteditable]:not([contenteditable="false"]),[hidden],[aria-hidden="true"]'));
 }
 
 export function isVisible(element: Element): boolean {
