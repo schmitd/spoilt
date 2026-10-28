@@ -132,6 +132,9 @@ export class ContentController {
     if (settings.useLocalAI && aiText.length) {
       await this.#ai.text(aiText, settings, memory, (candidate, match) => {
         if (!isCurrent()) return;
+        // Cache admission is optional: a valid live decision must still conceal
+        // an unchanged original even when its text exceeds the cache limit.
+        this.#redactor.text(candidate, match, settings.redactionStyle, true);
         // Retain the decision even when hydration detached the original node;
         // apply only to the exact classified text on this route.
         this.#prepared?.rememberText(candidate.text, match);
@@ -215,6 +218,7 @@ export class ContentController {
       }
     };
     for (const mutation of mutations) {
+      if (mutation.type === "attributes" && (mutation.attributeName === "class" || mutation.attributeName === "style")) continue;
       const roots = mutation.type === "characterData" || mutation.type === "attributes" ? [mutation.target] : [...mutation.addedNodes];
       for (const root of roots) {
         if (remaining <= 0 && remainingImages <= 0) return;
