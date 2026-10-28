@@ -16,6 +16,7 @@ export interface Settings {
   scanImages: boolean;
   useLocalAI: boolean;
   useVision: boolean;
+  prefetchLinks: boolean;
   memoryEnabled: boolean;
   memoryRefreshHours: number;
   memoryMaxEntriesPerRule: number;

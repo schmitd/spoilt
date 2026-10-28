@@ -48,6 +48,34 @@ node tests/extension-smoke.mjs
 
 Screenshots are written to `.artifacts/release/`.
 
+## Hydration and frame exposure regression
+
+```bash
+npm run build
+npm run test:hydration
+```
+
+This loads the production extension in a temporary headless Chromium profile and
+uses synthetic localhost pages and a 600–900 ms isolated-world model mock. A
+`requestAnimationFrame` sampler inspects actual computed concealment styles on
+every sampled text fragment. Positive cases require zero exposed sampled frames;
+they also require sampled frames to exist, so an eventual mask alone cannot pass.
+
+Coverage includes prepared navigation, an exact headline split across inline
+markup, repeated hydration while another model request is busy, same-tab live
+cache reload, direct-rule mutations, and editable descendants. A stale AI snapshot
+must leave changed safe text visible. Route changes and expired-cache controls
+must allow unknown semantic text to remain visible rather than silently reusing
+an unrelated decision. In-flight results from the old route must be discarded.
+
+Frame logs and a screenshot are written to `.artifacts/hydration/`. Logs label the
+intentional visible controls separately from protected cases. The sampler is a
+render-timing regression, not a universal proof of no flash: it cannot verify all
+sites, native-model accuracy, browser UI pages, frames, shadow DOM, canvas text, or
+changes made later in a page's own animation-frame callback. Manual verification
+with the user's native Chrome model and an explicitly approved extension reload
+remains a separate step.
+
 ## Full Gate
 
 ```bash

@@ -32,6 +32,7 @@ export class AiClassifier {
     memory: SpoilerMemory,
     onMatch: (candidate: TextCandidate, match: Match) => void,
     isCurrent: () => boolean,
+    onBatch?: () => Promise<void>,
   ): Promise<void> {
     if (!settings.useLocalAI || typeof LanguageModel === "undefined") {
       await updateStatus({ aiText: "unavailable", aiReason: "Keyword protection is active. On-device analysis is unavailable.", lastError: "" });
@@ -45,6 +46,7 @@ export class AiClassifier {
             const batch = candidates.slice(index, index + 18).filter((candidate) => candidate.node.parentNode);
             if (!batch.length) continue;
             const decisions = await this.#classifyTextBatch(batch, settings, memory, isCurrent);
+            if (!isCurrent()) return;
             for (const decision of decisions) {
               const candidate = batch[decision.i];
               if (candidate && decision.block && candidate.node.parentNode) {
@@ -55,6 +57,7 @@ export class AiClassifier {
                 });
               }
             }
+            if (onBatch && isCurrent()) await onBatch();
           }
         } finally {
           await this.#resetText();
@@ -82,7 +85,7 @@ export class AiClassifier {
           for (const candidate of candidates.slice(0, 12)) {
             if (!isCurrent() || !candidate.element.isConnected) return;
             const decision = await this.#classifyImage(candidate, settings, memory, isCurrent);
-            if (decision?.block) {
+            if (decision?.block && isCurrent()) {
               onMatch(candidate, {
                 ruleId: "local-ai-image",
                 ruleName: decision.rule || "On-device image match",
@@ -97,6 +100,30 @@ export class AiClassifier {
     } catch (error) {
       await this.#recordLeaseFailure("image", error);
     }
+  }
+
+  async prefetchedImages(
+    inputs: Array<{ candidate: ImageCandidate; blob: Blob }>,
+    settings: Settings,
+    memory: SpoilerMemory,
+    onMatch: (candidate: ImageCandidate, match: Match) => void,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    if (!settings.useVision || typeof LanguageModel === "undefined" || !inputs.length) return;
+    try {
+      await withAiLease("image", async () => {
+        try {
+          for (const { candidate, blob } of inputs) {
+            if (!isCurrent()) return;
+            const decision = await this.#classifyImage(candidate, settings, memory, isCurrent, blob);
+            if (decision?.block && isCurrent()) onMatch(candidate, {
+              ruleId: "local-ai-image", ruleName: decision.rule || "On-device image match",
+              reason: decision.reason || "on-device image match",
+            });
+          }
+        } finally { await this.#resetImage(); }
+      });
+    } catch (error) { await this.#recordLeaseFailure("image", error); }
   }
 
   async reset(): Promise<void> {
@@ -148,15 +175,16 @@ export class AiClassifier {
     settings: Settings,
     memory: SpoilerMemory,
     isCurrent: () => boolean,
+    prefetchedBlob?: Blob,
   ): Promise<ImageDecision | null> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (!isCurrent() || !candidate.element.isConnected) return null;
+      if (!isCurrent() || (!prefetchedBlob && !candidate.element.isConnected)) return null;
       const session = await this.#getImageSession(settings);
       if (!session) return null;
       try {
         const decision = await this.#imageQueue.run(async () => {
-          if (!isCurrent() || !candidate.element.isConnected) return null;
-          const input = await promptImageInput(candidate.element);
+          if (!isCurrent() || (!prefetchedBlob && !candidate.element.isConnected)) return null;
+          const input = prefetchedBlob ?? await promptImageInput(candidate.element);
           if (!input) return null;
           const result = await session.prompt([{
             role: "user",
