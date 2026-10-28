@@ -217,6 +217,20 @@ try {
   await page.waitForTimeout(200);
   await frames("cold deterministic mutation", frame => frame.text === "exampleterm direct match");
   assert.equal(await page.locator("[contenteditable] .spoilt-redacted-text").count(), 0, "editable descendant was modified");
+  await installModel(150);
+  await settings({ useLocalAI: true });
+  await page.evaluate(text => {
+    const paragraph = document.createElement("p"); paragraph.id = "long-ai-match";
+    paragraph.textContent = `${text} ${"ordinary words ".repeat(350)}`;
+    document.querySelector("main").append(paragraph);
+  }, spoiler);
+  await until(async () => {
+    const result = await cdp.send("Runtime.evaluate", { contextId: isolated,
+      expression: `globalThis.__modelInputs.some(items => items.some(text => text.startsWith(${JSON.stringify(`${spoiler} ordinary words`)})))`, returnByValue: true });
+    return result.result.value;
+  }, "positive model request for the long snapshot");
+  await page.waitForSelector("#long-ai-match .spoilt-redacted-text", { timeout: 3000 });
+  assert((await page.locator("#long-ai-match .spoilt-redacted-text").textContent()).length > 4000);
   await page.screenshot({ path: resolve(artifacts, "hydration.png") });
   await cdp.detach();
   console.log(JSON.stringify(reports, null, 2));

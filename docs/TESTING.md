@@ -76,6 +76,14 @@ changes made later in a page's own animation-frame callback. Manual verification
 with the user's native Chrome model and an explicitly approved extension reload
 remains a separate step.
 
+Review regressions additionally verify that a positive live AI result over 4,000
+normalized characters is concealed even though it is not admitted to the reuse
+cache; code/hidden descendants cannot trigger masks over safe visible prose;
+repeated root class/style changes do not synchronously rewalk unchanged subtrees;
+large revealed subtrees finish in bounded continuation chunks while new small
+changes retain priority; and failed, `no-store`, or oversized speculative images
+consume the same three-attempt budget as successful downloads.
+
 ## Full Gate
 
 ```bash

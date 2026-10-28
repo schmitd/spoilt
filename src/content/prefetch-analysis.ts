@@ -3,7 +3,7 @@ import { descriptionMatch, keywordMatch, normalizeWhitespace } from "../core/mat
 import { memoryMatch } from "../core/memory";
 import type { Match, Settings, SpoilerMemory } from "../core/types";
 import { AiClassifier } from "./ai-classifier";
-import { imageMetadata, imageSourceUrls, isSpoiltNode, Redactor, shouldSkipElement, type TextCandidate } from "./dom";
+import { imageMetadata, imageSourceUrls, isSpoiltNode, MASKED_TEXT_CLASS, Redactor, shouldSkipElement, type TextCandidate } from "./dom";
 
 export interface CachedAnalysis {
   url: string;
@@ -15,6 +15,9 @@ export interface CachedAnalysis {
 }
 
 const INLINE_CONTAINERS = "h1,h2,h3,h4,h5,h6,p,li,a,figcaption,div,span";
+const EXCLUDED_INLINE_CONTENT = 'h1,h2,h3,h4,h5,h6,p,li,div,section,article,main,table,form,input,textarea,select,[contenteditable],script,style,noscript,template,code,pre,kbd,samp,[hidden],[aria-hidden="true"]';
+const MAX_INLINE_NODES = 64;
+interface ApplyJob { root: Node; nodes: Generator<Node> }
 
 export function analysisSignature(settings: Settings, memory: SpoilerMemory): string {
   return JSON.stringify({ rules: settings.rules, strictness: settings.strictness,
@@ -116,16 +119,20 @@ async function collectPrefetchedImages(html: string, pageUrl: string, signal: Ab
   template.innerHTML = html;
   const inputs: Array<{ candidate: { element: Element; metadataText: string }; blob: Blob }> = [];
   const seen = new Set<string>();
+  let attempts = 0;
+  // Bound the complete download phase as well as the number of attempts.
+  const downloadSignal = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
   for (const image of template.content.querySelectorAll<HTMLImageElement>("img[src]")) {
-    if (inputs.length >= 3 || signal.aborted) break;
+    if (attempts >= 3 || downloadSignal.aborted) break;
     if (image.hasAttribute("srcset") || image.closest('picture,[hidden],[aria-hidden="true"]')) continue;
     let source: URL;
     try { source = new URL(image.getAttribute("src") || "", pageUrl); } catch { continue; }
     if (source.origin !== new URL(pageUrl).origin || source.search || !/^https?:$/.test(source.protocol) || seen.has(source.href)) continue;
     seen.add(source.href);
+    attempts += 1;
     try {
       const response = await fetch(source.href, { mode: "same-origin", credentials: "same-origin", redirect: "error", priority: "low",
-        signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) });
+        signal: downloadSignal });
       if (!response.ok || !/^image\//i.test(response.headers.get("content-type") || "")
         || /\bno-store\b/i.test(response.headers.get("cache-control") || "")
         || Number(response.headers.get("content-length")) > 1_000_000 || !response.body) {
@@ -156,61 +163,91 @@ async function collectPrefetchedImages(html: string, pageUrl: string, signal: Ab
 export class PreparedTextApplier {
   #observer: MutationObserver | null = null;
   #matches = new Map<string, { match: Match; ai: boolean }>();
-  #redactor: Redactor;
   #images = new Map<string, { alt: string; match: Match; ai: boolean }>();
-  #settings: Settings;
-  #memory: SpoilerMemory;
-  #url = location.href;
   #inlineValues = new WeakMap<Element, string>();
+  #checkedText = new WeakMap<Text, string>();
+  #negativeInline = new WeakMap<Element, string>();
+  #jobs: ApplyJob[] = [];
+  #queued = new Map<Node, ApplyJob>();
+  #timer = 0;
+  #reapplyQueued = false;
+  #url = location.href;
 
-  constructor(redactor: Redactor, settings: Settings, analysis: CachedAnalysis, memory: SpoilerMemory = { version: 1, enabled: false, lastUpdatedAt: "", lastError: "", entries: [], imageExamples: [], ruleRuns: {} }) {
-    this.#redactor = redactor;
-    this.#settings = settings;
-    this.#memory = memory;
+  constructor(
+    private redactor: Redactor,
+    private settings: Settings,
+    analysis: CachedAnalysis,
+    private memory: SpoilerMemory = { version: 1, enabled: false, lastUpdatedAt: "", lastError: "", entries: [], imageExamples: [], ruleRuns: {} },
+  ) {
     for (const item of analysis.matches.slice(0, 700)) this.#matches.set(normalizeWhitespace(item.text), { match: item.match, ai: item.ai !== false });
     for (const item of (analysis.images ?? []).slice(0, 300)) this.#images.set(item.url, { alt: item.alt, match: item.match, ai: item.ai !== false });
   }
 
   start(): void {
-    if (this.#observer || !this.#settings.enabled) return;
+    if (this.#observer || !this.settings.enabled || (!this.settings.scanText && !this.settings.scanImages)) return;
     this.#observer = new MutationObserver((records) => {
       if (location.href !== this.#url) return;
+      const roots = new Set<Node>();
+      const restored = new Set<Element>();
+      const childTargets = new Set<Node>();
       for (const record of records) {
+        // Presentation changes do not change text identities. The controller
+        // schedules visibility-dependent AI separately; never rewalk a whole
+        // page synchronously for a theme/animation update.
+        if (record.type === "attributes" && (record.attributeName === "class" || record.attributeName === "style")) {
+          const element = record.target as Element;
+          if (!isSpoiltNode(element) && element.childElementCount === 0) roots.add(element);
+          continue;
+        }
         let parent = record.target instanceof Element ? record.target : record.target.parentElement;
+        let groupRestored = false;
         while (parent) {
           const original = this.#inlineValues.get(parent);
-          if (original && original !== normalizeWhitespace(parent.textContent)) {
+          if (original && !restored.has(parent) && this.#inlineSnapshot(parent)?.text !== original) {
             this.#inlineValues.delete(parent);
-            this.#redactor.restoreTextWithin(parent);
-            this.#apply(parent);
+            this.redactor.restoreTextWithin(parent);
+            restored.add(parent); roots.add(parent); groupRestored = true;
             break;
           }
           parent = parent.parentElement;
         }
-        if (parent) continue;
-        const current = this.#redactor.restoreChanged(record.target);
-        if (current !== record.target) { this.#apply(current); continue; }
+        if (groupRestored) continue;
+        const current = this.redactor.restoreChanged(record.target);
+        if (current !== record.target) { roots.add(current); continue; }
         if (isSpoiltNode(record.target)) continue;
-        if (record.type === "characterData" || record.type === "attributes") this.#apply(record.target);
-        else for (const node of record.addedNodes) this.#apply(node);
+        if (record.type === "characterData" || record.type === "attributes") roots.add(record.target);
+        else {
+          const added = [...record.addedNodes].filter(node => !isSpoiltNode(node));
+          if (!added.length) continue;
+          if (childTargets.has(record.target) || added.length > 1) roots.add(record.target);
+          else { childTargets.add(record.target); roots.add(added[0]!); }
+        }
       }
+      if (this.#enqueue(roots)) this.#drain();
     });
-    // Observe the Document so replacing body or the root during hydration cannot
-    // detach protection. Mutation callbacks run before the next rendering step.
-    this.#observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "data-src", "data-srcset", "alt", "title", "poster", "hidden", "aria-hidden", "class", "style"] });
+    this.#observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true,
+      attributeFilter: ["src", "srcset", "data-src", "data-srcset", "alt", "title", "poster", "hidden", "aria-hidden", "contenteditable", "class", "style"] });
     this.apply();
   }
 
-  stop(): void { this.#observer?.disconnect(); this.#observer = null; }
+  stop(): void {
+    this.#observer?.disconnect(); this.#observer = null;
+    window.clearTimeout(this.#timer); this.#timer = 0; this.#jobs = []; this.#queued.clear();
+  }
 
-  apply(): void { if (location.href === this.#url && document.documentElement) this.#apply(document.documentElement); }
+  apply(): void {
+    if (!this.#observer || location.href !== this.#url || !document.documentElement) return;
+    this.#enqueue(new Set([document.documentElement]));
+    this.#drain();
+  }
 
   rememberText(text: string, match: Match, ai = true): void {
     const key = normalizeWhitespace(text);
     if (location.href !== this.#url || !key || key.length > 4000) return;
     if (!this.#matches.has(key) && this.#matches.size >= 700) this.#matches.delete(this.#matches.keys().next().value!);
     this.#matches.set(key, { match, ai });
-    this.apply();
+    this.#checkedText = new WeakMap(); this.#negativeInline = new WeakMap();
+    this.#reapply();
   }
 
   rememberImage(element: Element, match: Match, ai = true): void {
@@ -220,6 +257,7 @@ export class PreparedTextApplier {
       if (!this.#images.has(url) && this.#images.size >= 300) this.#images.delete(this.#images.keys().next().value!);
       this.#images.set(url, { alt: image.alt, match, ai });
     }
+    this.#reapply();
   }
 
   snapshot(signature: string): CachedAnalysis {
@@ -228,85 +266,141 @@ export class PreparedTextApplier {
       images: [...this.#images].map(([url, result]) => ({ url, ...result })) };
   }
 
+  #reapply(): void {
+    if (this.#reapplyQueued) return;
+    this.#reapplyQueued = true;
+    queueMicrotask(() => { this.#reapplyQueued = false; this.apply(); });
+  }
+
+  #enqueue(roots: Set<Node>): boolean {
+    const fresh = new Set<ApplyJob>();
+    for (const root of roots) {
+      if (!root.isConnected || isSpoiltNode(root)) continue;
+      let parent = root.parentNode;
+      while (parent && !roots.has(parent)) parent = parent.parentNode;
+      if (parent) continue;
+      const existing = this.#queued.get(root);
+      if (existing) { existing.nodes = this.#nodes(root); fresh.add(existing); }
+      else {
+        const job = { root, nodes: this.#nodes(root) };
+        this.#queued.set(root, job); fresh.add(job);
+      }
+    }
+    // New small changes must not wait behind the deferred tail of a large page.
+    if (fresh.size) this.#jobs = [...fresh, ...this.#jobs.filter(job => !fresh.has(job))];
+    return fresh.size > 0;
+  }
+
+  *#nodes(root: Node): Generator<Node> {
+    const stack = [root];
+    while (stack.length) {
+      const node = stack.pop()!;
+      if (node !== root && node.nextSibling) stack.push(node.nextSibling);
+      if (!node.isConnected || (node instanceof Element && shouldSkipElement(node))) continue;
+      yield node;
+      // Read children after applying a decision, so replacement masks do not
+      // invalidate a TreeWalker cursor or require a whole-subtree snapshot.
+      if (node.firstChild && !isSpoiltNode(node)) stack.push(node.firstChild);
+    }
+  }
+
+  #drain(): void {
+    window.clearTimeout(this.#timer); this.#timer = 0;
+    if (!this.#observer || location.href !== this.#url) { this.#jobs = []; this.#queued.clear(); return; }
+    let remaining = Math.max(1, (this.settings.scanText ? this.settings.maxTextNodesPerScan : 0)
+      + (this.settings.scanImages ? this.settings.maxImagesPerScan : 0));
+    let completed = 0;
+    while (remaining-- > 0 && completed < this.#jobs.length) {
+      const job = this.#jobs[completed]!;
+      const step = job.nodes.next();
+      if (step.done) { this.#queued.delete(job.root); completed += 1; continue; }
+      const node = step.value;
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (!this.#inlineAround(node.parentElement)) this.#text(node as Text);
+      } else if (node instanceof Element) {
+        if (this.settings.scanText && node.matches(INLINE_CONTAINERS)) this.#inline(node);
+        if (node instanceof HTMLImageElement) this.#image(node);
+        if (node instanceof HTMLSourceElement) {
+          const image = node.closest("picture")?.querySelector("img");
+          if (image) this.#image(image);
+        }
+      }
+    }
+    if (completed) this.#jobs = this.#jobs.slice(completed);
+    if (this.#jobs.length) this.#timer = window.setTimeout(() => this.#drain(), 0);
+  }
+
   #match(text: string) {
     const cached = this.#matches.get(text);
     if (cached) return cached;
-    const match = keywordMatch(text, this.#settings.rules)
-      || memoryMatch(text, this.#settings.rules, this.#memory)
-      || descriptionMatch(text, this.#settings.rules);
+    const match = keywordMatch(text, this.settings.rules)
+      || memoryMatch(text, this.settings.rules, this.memory)
+      || descriptionMatch(text, this.settings.rules);
     return match ? { match, ai: false } : undefined;
   }
 
-  #apply(root: Node): void {
-    if (isSpoiltNode(root)) return;
-    if (root.nodeType === Node.TEXT_NODE) {
-      if (this.#inlineAround(root.parentElement)) return;
-      this.#text(root as Text); return;
-    }
-    if (root.nodeType !== Node.ELEMENT_NODE) return;
-    if (shouldSkipElement(root as Element)) return;
-    this.#inlineAround(root as Element);
-    if (root instanceof HTMLImageElement) this.#image(root);
-    if (root instanceof Element) {
-      root.querySelectorAll<HTMLImageElement>("img").forEach((image) => this.#image(image));
-      if (root instanceof HTMLSourceElement) root.closest("picture")?.querySelectorAll<HTMLImageElement>("img").forEach((image) => this.#image(image));
-    }
-    if (this.#settings.scanText) {
-      for (const element of (root as Element).querySelectorAll(INLINE_CONTAINERS)) this.#inline(element);
-    }
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const nodes: Text[] = [];
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text);
-    for (const node of nodes) this.#text(node);
-  }
-
   #image(element: HTMLImageElement): void {
-    if (!this.#settings.scanImages || shouldSkipElement(element)) return;
+    if (!this.settings.scanImages || shouldSkipElement(element)) return;
     const direct = this.#match(imageMetadata(element));
     if (direct && !direct.ai) {
-      this.#redactor.image({ element: element.closest("picture") ?? element, metadataText: imageMetadata(element) }, direct.match, this.#settings.redactionStyle);
+      this.redactor.image({ element: element.closest("picture") ?? element, metadataText: imageMetadata(element) }, direct.match, this.settings.redactionStyle);
       return;
     }
     for (const source of imageSourceUrls(element, location.href)) {
       const result = this.#images.get(source);
       if (result && result.alt === element.alt) {
-        const target = element.closest("picture") ?? element;
-        this.#redactor.image({ element: target, metadataText: "" }, result.match, this.#settings.redactionStyle, result.ai);
+        this.redactor.image({ element: element.closest("picture") ?? element, metadataText: "" }, result.match, this.settings.redactionStyle, result.ai);
         return;
       }
     }
   }
 
   #text(node: Text): void {
-    const parent = node.parentElement;
-    if (!this.#settings.scanText || !parent || shouldSkipElement(parent)) return;
+    if (!this.settings.scanText || !node.parentElement || shouldSkipElement(node.parentElement)) return;
     const text = normalizeWhitespace(node.data);
-    if (text.length < 4) return;
+    if (text.length < 4 || this.#checkedText.get(node) === text) return;
+    this.#checkedText.set(node, text);
     const result = this.#match(text);
-    if (result) this.#redactor.text({ node, text }, result.match, this.#settings.redactionStyle, result.ai);
+    if (result) this.redactor.text({ node, text }, result.match, this.settings.redactionStyle, result.ai);
+  }
+
+  #inlineSnapshot(element: Element): { text: string; nodes: Text[] } | null {
+    if (shouldSkipElement(element)) return null;
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    let visited = 0;
+    let characters = 0;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      // Our wrappers must not make the same inline group exceed its original
+      // structural budget and repeatedly restore/reapply itself.
+      if (!(node instanceof Element && node.classList.contains(MASKED_TEXT_CLASS)) && ++visited > MAX_INLINE_NODES) return null;
+      if (node instanceof Element && node.matches(EXCLUDED_INLINE_CONTENT)) return null;
+      if (node.nodeType === Node.TEXT_NODE) {
+        characters += (node as Text).data.length;
+        if (characters > 8000) return null;
+        nodes.push(node as Text);
+      }
+    }
+    const text = normalizeWhitespace(nodes.map(node => node.data).join(""));
+    return text.length >= 4 && text.length <= 4000 ? { text, nodes } : null;
   }
 
   #inline(element: Element): boolean {
-    if (!this.#settings.scanText || shouldSkipElement(element)
-      || element.querySelector('h1,h2,h3,h4,h5,h6,p,li,div,section,article,main,table,form,input,textarea,select,[contenteditable],script,style')) return false;
-    const text = normalizeWhitespace(element.textContent);
-    if (text.length < 4 || text.length > 4000) return false;
-    const result = this.#match(text);
-    if (!result) return false;
-    this.#inlineValues.set(element, text);
-    // Exact full inline text tolerates framework splitting into emphasis/link
-    // nodes. Never reuse a semantic decision for a substring or a whole article.
-    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-    const nodes: Text[] = [];
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text);
-    for (const node of nodes) if (node.data.trim() && node.parentElement && !shouldSkipElement(node.parentElement)) {
-      this.#redactor.text({ node, text: normalizeWhitespace(node.data) }, result.match, this.#settings.redactionStyle, result.ai);
+    if (!this.settings.scanText) return false;
+    const snapshot = this.#inlineSnapshot(element);
+    if (!snapshot || this.#negativeInline.get(element) === snapshot.text) return false;
+    const result = this.#match(snapshot.text);
+    if (!result) { this.#negativeInline.set(element, snapshot.text); return false; }
+    this.#inlineValues.set(element, snapshot.text);
+    for (const node of snapshot.nodes) if (node.data.trim() && node.parentElement && !shouldSkipElement(node.parentElement)) {
+      this.redactor.text({ node, text: normalizeWhitespace(node.data) }, result.match, this.settings.redactionStyle, result.ai);
     }
     return true;
   }
 
   #inlineAround(element: Element | null): boolean {
-    for (let parent = element; parent && parent !== document.body; parent = parent.parentElement) {
+    let depth = 0;
+    for (let parent = element; parent && parent !== document.body && depth++ < MAX_INLINE_NODES; parent = parent.parentElement) {
       if (parent.matches(INLINE_CONTAINERS) && this.#inline(parent)) return true;
     }
     return false;

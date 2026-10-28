@@ -11,6 +11,81 @@ vi.mock("../platform/storage", () => ({ updateStatus: vi.fn() }));
 afterEach(() => { document.body.innerHTML = ""; });
 
 describe("prepared page analysis", () => {
+  it.each(['<code>exampleterm</code>', '<span hidden>exampleterm</span>', '<span aria-hidden="true">exampleterm</span>'])("does not match excluded descendants: %s", (excluded) => {
+    const settings = { ...DEFAULT_SETTINGS, rules: [{ id: "topic", name: "Topic", description: "", keywords: ["exampleterm"], enabled: true }] };
+    document.body.innerHTML = `<p>Ordinary safe prose ${excluded}</p>`;
+    const applier = new PreparedTextApplier(new Redactor(), settings, { url: location.href, signature: "", createdAt: Date.now(), matches: [] });
+    applier.start();
+    const count = document.querySelectorAll(".spoilt-redacted-text").length;
+    applier.stop();
+    expect(count).toBe(0);
+  });
+  it("does not synchronously rewalk unchanged subtrees for repeated root class/style changes", async () => {
+    document.body.innerHTML = Array.from({ length: 1000 }, (_, i) => `<p>Ordinary safe prose ${i}</p>`).join("");
+    const applier = new PreparedTextApplier(new Redactor(), { ...DEFAULT_SETTINGS, maxTextNodesPerScan: 50 }, { url: location.href, signature: "", createdAt: Date.now(), matches: [] });
+    applier.start();
+    await Promise.resolve();
+    const walk = vi.spyOn(document, "createTreeWalker");
+    for (let i = 0; i < 20; i++) {
+      document.documentElement.className = `theme-${i}`;
+      document.documentElement.style.setProperty("--theme", String(i));
+    }
+    await Promise.resolve();
+    const visits = walk.mock.calls.length;
+    applier.stop(); walk.mockRestore();
+    document.documentElement.removeAttribute("class"); document.documentElement.removeAttribute("style");
+    expect(visits).toBeLessThanOrEqual(1);
+  });
+  it.each(["failed", "no-store", "oversize"])("caps speculative image attempts for %s responses", async (kind) => {
+    const request = vi.spyOn(globalThis, "fetch").mockImplementation(async () => kind === "failed" ? new Response(null, { status: 404 })
+      : new Response("bytes", { headers: { "content-type": "image/png", ...(kind === "no-store" ? { "cache-control": "no-store" } : { "content-length": "2000000" }) } }));
+    vi.stubGlobal("LanguageModel", { availability: async () => "available" });
+    try {
+      const html = Array.from({ length: 20 }, (_, i) => `<img src="/failed-${i}.png" alt="A scene">`).join("");
+      await precomputePage("https://example.com/story", html, { ...DEFAULT_SETTINGS, prefetchLinks: true, scanText: false, useLocalAI: true, useVision: true, rules: [] }, normalizeMemory(), new AbortController().signal);
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally { request.mockRestore(); vi.unstubAllGlobals(); }
+  });
+  it("coalesces a revealed subtree and completes bounded continuation work", async () => {
+    const settings = { ...DEFAULT_SETTINGS, scanImages: false, maxTextNodesPerScan: 50,
+      rules: [{ id: "topic", name: "Topic", description: "", keywords: ["exampleterm"], enabled: true }] };
+    const applier = new PreparedTextApplier(new Redactor(), settings, { url: location.href, signature: "", createdAt: Date.now(), matches: [] });
+    applier.start();
+    const section = document.createElement("section"); section.hidden = true;
+    section.innerHTML = Array.from({ length: 300 }, (_, i) => `<p>exampleterm content ${i}</p>`).join("");
+    document.body.append(section);
+    await Promise.resolve();
+    section.hidden = false;
+    section.setAttribute("aria-hidden", "false"); section.setAttribute("aria-hidden", "false");
+    await Promise.resolve();
+    const immediate = section.querySelectorAll(".spoilt-redacted-text").length;
+    expect(immediate).toBeGreaterThan(0);
+    expect(immediate).toBeLessThanOrEqual(50);
+    try { await vi.waitFor(() => expect(section.querySelectorAll(".spoilt-redacted-text")).toHaveLength(300)); }
+    finally { applier.stop(); }
+  });
+  it("keeps an inline group stable when its own mask wrappers exceed the node budget", async () => {
+    const fragments = Array.from({ length: 30 }, (_, i) => `part${i} `);
+    const text = fragments.join("").trim();
+    document.body.innerHTML = `<h1>${fragments.map(part => `<b>${part}</b>`).join("")}</h1>`;
+    const applier = new PreparedTextApplier(new Redactor(), DEFAULT_SETTINGS, { url: location.href, signature: "", createdAt: Date.now(),
+      matches: [{ text, match: { ruleId: "local-ai", ruleName: "Story", reason: "semantic" } }] });
+    applier.start();
+    await Promise.resolve(); await Promise.resolve();
+    expect(document.querySelectorAll("h1 .spoilt-redacted-text")).toHaveLength(30);
+    applier.stop();
+  });
+  it("applies new small changes ahead of an existing large deferred scan", async () => {
+    document.body.innerHTML = Array.from({ length: 1000 }, (_, i) => `<p>Ordinary safe text ${i}</p>`).join("");
+    const settings = { ...DEFAULT_SETTINGS, scanImages: false, maxTextNodesPerScan: 50,
+      rules: [{ id: "topic", name: "Topic", description: "", keywords: ["exampleterm"], enabled: true }] };
+    const applier = new PreparedTextApplier(new Redactor(), settings, { url: location.href, signature: "", createdAt: Date.now(), matches: [] });
+    applier.start();
+    document.body.insertAdjacentHTML("beforeend", "<h1>exampleterm new headline</h1>");
+    await Promise.resolve();
+    expect(document.querySelector("h1 .spoilt-redacted-text")).toBeTruthy();
+    applier.stop();
+  });
   it("extracts bounded inert text while excluding scripts and editable fields", () => {
     const nodes = collectPrefetchedText('<h1>The secret outcome is revealed</h1><script>window.alert(1)</script><textarea>private input</textarea><p>Safe article text</p>', 1);
     expect(nodes.map((item) => item.text)).toEqual(["The secret outcome is revealed"]);

@@ -147,3 +147,13 @@ Run `npm run test:hydration` after building for frame samples covering known
 decisions, split-node hydration, a busy model, reloads, cache expiry, route changes,
 stale AI results, and direct-rule mutations. The synthetic model is deliberately
 slow; this tests extension timing, not the native model's classification accuracy.
+
+Live concealment does not depend on cache admission: an unchanged AI-positive text
+node longer than the 4,000-character reuse limit is still concealed immediately.
+Inline aggregation excludes code, hidden/editable content and other skipped
+subtrees, and is bounded to 64 descendant nodes. Mutation roots are coalesced;
+cosmetic root attributes do not synchronously trigger full-page scans. Traversal
+uses bounded chunks based on the enabled scan budgets, with remaining large-page
+work deferred and new small changes prioritized. Content beyond a chunk's budget
+can wait for a continuation. Speculative image downloads have at most three
+attempts and a five-second total download deadline, including failed responses.
