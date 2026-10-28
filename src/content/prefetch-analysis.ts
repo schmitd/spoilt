@@ -232,7 +232,7 @@ export class PreparedTextApplier {
 
   stop(): void {
     this.#observer?.disconnect(); this.#observer = null;
-    window.clearTimeout(this.#timer); this.#timer = 0; this.#jobs = []; this.#queued.clear();
+    window.clearTimeout(this.#timer); this.#timer = 0; this.#clearJobs();
   }
 
   apply(): void {
@@ -280,7 +280,7 @@ export class PreparedTextApplier {
       while (parent && !roots.has(parent)) parent = parent.parentNode;
       if (parent) continue;
       const existing = this.#queued.get(root);
-      if (existing) { existing.nodes = this.#nodes(root); fresh.add(existing); }
+      if (existing) { existing.nodes.return(undefined); existing.nodes = this.#nodes(root); fresh.add(existing); }
       else {
         const job = { root, nodes: this.#nodes(root) };
         this.#queued.set(root, job); fresh.add(job);
@@ -292,21 +292,46 @@ export class PreparedTextApplier {
   }
 
   *#nodes(root: Node): Generator<Node> {
-    const stack = [root];
-    while (stack.length) {
-      const node = stack.pop()!;
-      if (node !== root && node.nextSibling) stack.push(node.nextSibling);
-      if (!node.isConnected || (node instanceof Element && shouldSkipElement(node))) continue;
-      yield node;
-      // Read children after applying a decision, so replacement masks do not
-      // invalidate a TreeWalker cursor or require a whole-subtree snapshot.
-      if (node.firstChild && !isSpoiltNode(node)) stack.push(node.firstChild);
+    const stack: Array<{ parent: Node; cursor: Range }> = [];
+    let next: Node | null = root;
+    try {
+      while (next || stack.length) {
+        if (next) {
+          const node: Node = next; next = null;
+          if (!node.isConnected || (node instanceof Element && shouldSkipElement(node))) continue;
+          yield node;
+          // A live boundary survives removal of either the visited child or
+          // the next sibling while a continuation is paused. Never depend on
+          // nextSibling from a possibly detached queued node.
+          if (node.isConnected && node.firstChild && !isSpoiltNode(node)) {
+            const cursor = document.createRange();
+            cursor.setStart(node, 0); cursor.collapse(true);
+            stack.push({ parent: node, cursor });
+          }
+        } else {
+          const frame = stack[stack.length - 1]!;
+          if (!frame.parent.isConnected || frame.cursor.startContainer !== frame.parent) {
+            frame.cursor.detach(); stack.pop(); continue;
+          }
+          const offset = frame.cursor.startOffset;
+          next = frame.parent.childNodes.item(offset);
+          if (!next) { frame.cursor.detach(); stack.pop(); continue; }
+          frame.cursor.setStart(frame.parent, offset + 1); frame.cursor.collapse(true);
+        }
+      }
+    } finally {
+      for (const frame of stack) frame.cursor.detach();
     }
+  }
+
+  #clearJobs(): void {
+    for (const job of this.#jobs) job.nodes.return(undefined);
+    this.#jobs = []; this.#queued.clear();
   }
 
   #drain(): void {
     window.clearTimeout(this.#timer); this.#timer = 0;
-    if (!this.#observer || location.href !== this.#url) { this.#jobs = []; this.#queued.clear(); return; }
+    if (!this.#observer || location.href !== this.#url) { this.#clearJobs(); return; }
     let remaining = Math.max(1, (this.settings.scanText ? this.settings.maxTextNodesPerScan : 0)
       + (this.settings.scanImages ? this.settings.maxImagesPerScan : 0));
     let completed = 0;

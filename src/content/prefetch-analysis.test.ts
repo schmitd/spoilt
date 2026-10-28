@@ -11,6 +11,24 @@ vi.mock("../platform/storage", () => ({ updateStatus: vi.fn() }));
 afterEach(() => { document.body.innerHTML = ""; });
 
 describe("prepared page analysis", () => {
+  it.each([{ remove: [25] }, { remove: [24, 25, 26] }])("continues after hydration detaches siblings $remove between chunks", async ({ remove }) => {
+    const text = "The captain quietly survives the battle";
+    const applier = new PreparedTextApplier(new Redactor(), { ...DEFAULT_SETTINGS, scanImages: false, maxTextNodesPerScan: 50 }, {
+      url: location.href, signature: "", createdAt: Date.now(),
+      matches: [{ text, match: { ruleId: "local-ai", ruleName: "Story", reason: "semantic" } }],
+    });
+    applier.start();
+    const section = document.createElement("section");
+    section.innerHTML = Array.from({ length: 80 }, (_, i) => `<p id="cursor-${i}">Ordinary safe prose ${i}</p>`).join("") + `<h1>${text}</h1>`;
+    document.body.append(section);
+    await Promise.resolve();
+    // The first 50 visits end at the 25th paragraph. Its next sibling is queued
+    // while this paragraph's text and the remaining siblings are still pending.
+    for (const index of remove) section.querySelector(`#cursor-${index}`)!.remove();
+    expect(section.querySelector("h1 .spoilt-redacted-text")).toBeNull();
+    try { await vi.waitFor(() => expect(section.querySelector("h1 .spoilt-redacted-text")).toBeTruthy(), { timeout: 500 }); }
+    finally { applier.stop(); }
+  });
   it.each(['<code>exampleterm</code>', '<span hidden>exampleterm</span>', '<span aria-hidden="true">exampleterm</span>'])("does not match excluded descendants: %s", (excluded) => {
     const settings = { ...DEFAULT_SETTINGS, rules: [{ id: "topic", name: "Topic", description: "", keywords: ["exampleterm"], enabled: true }] };
     document.body.innerHTML = `<p>Ordinary safe prose ${excluded}</p>`;
