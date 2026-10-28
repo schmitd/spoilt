@@ -59,6 +59,18 @@ export class CandidateCollector {
     return candidates;
   }
 
+  retryText(candidates: TextCandidate[], signature: string): void {
+    for (const { node, text } of candidates) {
+      if (this.#processedText.get(node) === `${signature}:${text}`) this.#processedText.delete(node);
+    }
+  }
+
+  retryImages(candidates: ImageCandidate[], signature: string): void {
+    for (const { element, metadataText } of candidates) {
+      if (this.#processedImages.get(element) === `${signature}:${metadataText}`) this.#processedImages.delete(element);
+    }
+  }
+
   reset(): void {
     this.#processedText = new WeakMap();
     this.#processedImages = new WeakMap();

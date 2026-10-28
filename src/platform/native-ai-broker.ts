@@ -14,7 +14,7 @@ import { updateStatus } from "./storage";
 const MAX_PENDING = 8;
 const MAX_PENDING_PER_OWNER = 2;
 const REQUEST_TIMEOUT_MS = 25_000;
-const HOST_MISSING_REASON = "Open Prepare on-device analysis and keep analysis tab open. Keyword protection remains active.";
+const HOST_MISSING_REASON = "Open Prepare on-device analysis and keep Spoilt's analysis window open. Keyword protection remains active.";
 
 interface BrokerOptions {
   runtimeId: string;

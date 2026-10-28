@@ -332,7 +332,7 @@ describe("NativeAiBroker", () => {
     const removed = browser.tabs.onRemoved.addListener.mock.calls[0]![0] as (tabId: number) => void;
     const changed = browser.storage.onChanged.addListener.mock.calls[0]![0] as (changes: Record<string, unknown>, area: string) => void;
     await expect(message(classify(), sender())).resolves.toEqual(failure("unavailable"));
-    expect(updateStatus).toHaveBeenCalledWith({ aiText: "unavailable", aiVision: "unavailable", aiReason: "Open Prepare on-device analysis and keep analysis tab open. Keyword protection remains active." });
+    expect(updateStatus).toHaveBeenCalledWith({ aiText: "unavailable", aiVision: "unavailable", aiReason: "Open Prepare on-device analysis and keep Spoilt's analysis window open. Keyword protection remains active." });
     const port = makePort();
     connect(port.native);
     const first = message(classify(), sender(1));

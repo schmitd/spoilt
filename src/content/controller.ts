@@ -13,6 +13,7 @@ import { LinkPrefetcher } from "./link-prefetcher";
 import { analysisSignature, precomputePage, PreparedTextApplier, type CachedAnalysis } from "./prefetch-analysis";
 
 const SCAN_DEBOUNCE_MS = 150;
+const MAX_BUSY_RESCANS = 3;
 
 export class ContentController {
   #settings!: Settings;
@@ -32,12 +33,15 @@ export class ContentController {
   #configuration = 0;
   #starting = true;
   #configurationChanged = false;
+  #busyRetryTimer = 0;
+  #busyRetryAttempt = 0;
 
   async start(): Promise<void> {
     browser.runtime.onMessage.addListener((message: unknown) => this.#handleMessage(message));
     browser.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes[NATIVE_RETRY_KEY]) {
         if (!this.#starting && this.#settings?.enabled && this.#settings.useLocalAI) {
+          this.#resetBusyRetry();
           this.#collector.reset();
           this.schedule(0);
         }
@@ -117,6 +121,7 @@ export class ContentController {
     const imageCandidates = settings.scanImages ? this.#collector.collectImages(settings, signature) : [];
     const aiText = [];
     const aiImages = [];
+    let busy = false;
 
     for (const candidate of textCandidates) {
       const match = this.#match(candidate.text, settings, memory);
@@ -147,7 +152,12 @@ export class ContentController {
         // apply only to the exact classified text on this route.
         this.#prepared?.rememberText(candidate.text, match);
         this.#saveDecisions();
-      }, isCurrent);
+      }, isCurrent, undefined, (candidates) => {
+        if (isCurrent()) {
+          busy = true;
+          this.#collector.retryText(candidates, signature);
+        }
+      });
     }
     if (settings.useLocalAI && settings.useVision && aiImages.length) {
       await this.#ai.images(aiImages, settings, memory, (candidate, match) => {
@@ -155,14 +165,22 @@ export class ContentController {
         this.#prepared?.rememberImage(candidate.element, match);
         this.#redactor.image(candidate, match, settings.redactionStyle, true);
         this.#saveDecisions();
-      }, isCurrent);
+      }, isCurrent, (candidates) => {
+        if (isCurrent()) {
+          busy = true;
+          this.#collector.retryImages(candidates, signature);
+        }
+      });
     }
     if (run === this.#run) {
+      if (busy) this.#scheduleBusyRetry();
+      else if (aiText.length || aiImages.length) this.#resetBusyRetry();
       await updateStatus({ counters: this.#redactor.counters, pendingText: 0, pendingImages: 0 });
     }
   }
 
   async #reloadSettings(): Promise<void> {
+    this.#resetBusyRetry();
     const configuration = ++this.#configuration;
     const previous = this.#settings && this.#prepared?.snapshot(analysisSignature(this.#settings, this.#memory));
     this.#prefetcher.setEnabled(false);
@@ -283,6 +301,7 @@ export class ContentController {
 
   #checkRoute = (): void => {
     if (location.href === this.#url || !this.#settings) return;
+    this.#resetBusyRetry();
     this.#url = location.href;
     this.#run += 1;
     void this.#ai.reset();
@@ -293,6 +312,23 @@ export class ContentController {
     this.#protect(null);
     this.schedule(0);
   };
+
+  #scheduleBusyRetry(): void {
+    if (this.#busyRetryTimer || this.#busyRetryAttempt >= MAX_BUSY_RESCANS) return;
+    const configuration = this.#configuration;
+    const url = this.#url;
+    const delay = Math.round(1000 * 2 ** this.#busyRetryAttempt++ * (0.75 + Math.random() / 2));
+    this.#busyRetryTimer = window.setTimeout(() => {
+      this.#busyRetryTimer = 0;
+      if (configuration === this.#configuration && url === location.href && this.#settings.enabled && this.#settings.useLocalAI) this.schedule(0);
+    }, delay);
+  }
+
+  #resetBusyRetry(): void {
+    window.clearTimeout(this.#busyRetryTimer);
+    this.#busyRetryTimer = 0;
+    this.#busyRetryAttempt = 0;
+  }
 
   #saveDecisions(): void {
     if (this.#saveTimer) return;

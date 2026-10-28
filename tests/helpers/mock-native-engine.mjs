@@ -6,6 +6,7 @@ export async function openMockNativeEngine(context, extensionId, options = {}) {
     globalThis.__modelCalls = 0;
     globalThis.__modelInputs = [];
     globalThis.__modelCreates = 0;
+    globalThis.__modelImageInputs = [];
     Object.defineProperty(globalThis, "LanguageModel", { configurable: true, value: {
       availability: async () => "available",
       create: async () => {
@@ -13,7 +14,19 @@ export async function openMockNativeEngine(context, extensionId, options = {}) {
         if (failCreate) throw new DOMException("The device is unable to create a session to run the model. Please check the result of availability() first.", "InvalidStateError");
         return { destroy() {}, prompt: async input => {
           globalThis.__modelCalls++;
-          if (Array.isArray(input)) return JSON.stringify({ block: imageMatch, rule });
+          if (Array.isArray(input)) {
+            const content = input.flatMap(message => Array.isArray(message.content) ? message.content : []);
+            if (content.some(item => item.type === "text" && item.value.includes('{"ready":true}'))) return '{"ready":true}';
+            for (const item of content.filter(item => item.type === "image")) {
+              const bitmap = await createImageBitmap(item.value);
+              const canvas = document.createElement("canvas"); canvas.width = bitmap.width; canvas.height = bitmap.height;
+              const draw = canvas.getContext("2d"); draw.drawImage(bitmap, 0, 0);
+              globalThis.__modelImageInputs.push({ type: item.value.type, bytes: item.value.size,
+                width: bitmap.width, height: bitmap.height, pixel: [...draw.getImageData(0, 0, 1, 1).data] });
+              bitmap.close();
+            }
+            return JSON.stringify({ block: imageMatch, rule });
+          }
           const text = String(input);
           const items = JSON.parse(text.slice(text.lastIndexOf("Snippets:\n") + 10));
           globalThis.__modelInputs.push(items.map(item => item.text));
