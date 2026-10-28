@@ -16,6 +16,10 @@ describe("generated extension manifest", () => {
     expect(manifest.action.default_popup).toBe("popup.html");
     expect(manifest.options_page ?? manifest.options_ui?.page).toBe("options.html");
     expect(manifest.options_ui?.open_in_tab).toBe(true);
-    expect(manifest.permissions).toEqual(expect.arrayContaining(["storage", "activeTab", "alarms"]));
+    expect(manifest.permissions).toEqual(["storage", "activeTab", "alarms"]);
+    expect(manifest.host_permissions).toEqual(["<all_urls>"]);
+    expect(manifest.externally_connectable).toBeUndefined();
+    expect(manifest.web_accessible_resources).toBeUndefined();
+    expect(existsSync(resolve(".output/chrome-mv3/analysis.html"))).toBe(true);
   });
 });

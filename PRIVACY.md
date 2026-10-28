@@ -14,6 +14,8 @@ Spoilt reads visible page text and image metadata so it can apply the boundaries
 
 For image analysis, Spoilt may fetch the selected image into the extension process. The image is passed only to Chrome's on-device model and is not uploaded by Spoilt.
 
+Native analysis runs in Spoilt's dedicated extension tab, which must remain open while browsing. Ordinary scans use only models Chrome reports as already available. Model preparation requires an explicit button click after a download disclosure; Chrome may download several gigabytes. Classification inputs stay in memory during bounded requests and sessions are destroyed after each operation. An operational retry nonce contains no page content or URLs. Existing positive-decision retention is described below.
+
 ## Optional Recent Knowledge
 
 When **Keep recent knowledge up to date** is enabled, Spoilt sends search queries derived from enabled boundary names, descriptions, and keywords to Google News RSS. It stores a limited set of returned headlines, links, source names, dates, and image references locally.

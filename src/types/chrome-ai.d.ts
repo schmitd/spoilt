@@ -12,6 +12,7 @@ interface LanguageModelCreateOptions {
   expectedOutputs: unknown[];
   initialPrompts: unknown[];
   monitor?: (monitor: LanguageModelMonitor) => void;
+  signal?: AbortSignal;
 }
 
 interface LanguageModelStatic {

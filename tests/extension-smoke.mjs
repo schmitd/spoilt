@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import net from "node:net";
 import { chromium } from "@playwright/test";
+import { openMockNativeEngine } from "./helpers/mock-native-engine.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const extensionPath = process.env.SPOILT_EXTENSION_PATH ? resolve(process.env.SPOILT_EXTENSION_PATH) : resolve(root, ".output/chrome-mv3");
@@ -18,6 +19,7 @@ await mkdir(artifactDir, { recursive: true });
 const context = await chromium.launchPersistentContext("", {
   channel: "chromium",
   headless: true,
+  chromiumSandbox: true,
   args: [
     `--disable-extensions-except=${extensionPath}`,
     `--load-extension=${extensionPath}`,
@@ -36,6 +38,8 @@ try {
   }
   const extensionId = new URL(worker.url()).host;
 
+  console.log("verify native analysis onboarding and internal boundary");
+  await verifyNativeOnboarding(context, extensionId, worker);
   console.log("verify global AI lease");
   await verifyAiLease(context, extensionId, worker);
   console.log("verify recoverable model creation failure");
@@ -62,6 +66,39 @@ try {
 } finally {
   await context.close();
   fixtureServer.close();
+}
+
+async function verifyNativeOnboarding(context, extensionId, worker) {
+  await worker.evaluate(async () => {
+    await chrome.storage.sync.set({ "spoilt.settings": { enabled: true, useLocalAI: true,
+      useVision: false, memoryEnabled: false, prefetchLinks: false } });
+  });
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.getByText("Protection details", { exact: true }).click();
+  const opened = context.waitForEvent("page");
+  await popup.getByRole("button", { name: "Prepare on-device analysis", exact: true }).click();
+  const engine = await opened;
+  await engine.waitForURL(`chrome-extension://${extensionId}/analysis.html`);
+  await engine.locator('[data-native-host="connected"]').waitFor();
+  assert(await engine.getByText(/several gigabytes/).isVisible(), "Download disclosure is missing");
+  assert(await engine.getByText(/Keep this tab open/).first().isVisible(), "Analysis-tab requirement is missing");
+  // Opening the page only checks capabilities; this test never consents to a download.
+  const count = context.pages().length;
+  await popup.getByRole("button", { name: "Prepare on-device analysis", exact: true }).click();
+  await popup.waitForTimeout(200);
+  assert.equal(context.pages().length, count, "Repeated Prepare created a duplicate inference tab");
+  const denied = await popup.evaluate(() => chrome.runtime.sendMessage({ scope: "spoilt-native",
+    type: "classify", requestId: crypto.randomUUID(), input: { kind: "text", texts: ["Untrusted UI requester"] } }));
+  assert.deepEqual(denied, { ok: false, reason: "invalid" }, "Extension UI was granted a page classification endpoint");
+  const forgedHostRejected = await popup.evaluate(() => new Promise(resolve => {
+    const port = chrome.runtime.connect({ name: "spoilt-native-host" });
+    port.onDisconnect.addListener(() => { void chrome.runtime.lastError; resolve(true); });
+    setTimeout(() => resolve(false), 1000);
+  }));
+  assert.equal(forgedHostRejected, true, "A popup impersonated the inference document");
+  await engine.close();
+  await popup.close();
 }
 
 async function verifyPreparedKeywords(page, port, worker, newTab = false) {
@@ -146,28 +183,9 @@ async function verifyPreparedAnalysis(page, port, worker, extensionId) {
     };
     requestAnimationFrame(check);
   });
-  const cdp = await page.context().newCDPSession(page);
-  const contexts = [];
-  cdp.on("Runtime.executionContextCreated", ({ context }) => {
-    if (context.name === "Spoilt" && context.origin === `chrome-extension://${extensionId}`) contexts.push(context.id);
-  });
-  await cdp.send("Runtime.enable");
+  const engine = await openMockNativeEngine(page.context(), extensionId, { rule: "Story events" });
+  await page.bringToFront();
   await page.goto(`http://127.0.0.1:${port}/prepared/source`);
-  await waitFor(() => contexts.length > 0, 5000, "Missing source content script context");
-  const nativeModel = await cdp.send("Runtime.evaluate", { contextId: contexts.at(-1), expression: 'typeof LanguageModel', returnByValue: true });
-  console.log(`native Prompt API in isolated test browser: ${nativeModel.result.value}`);
-  const installModel = await cdp.send("Runtime.evaluate", { contextId: contexts.at(-1), expression: `
-    Object.defineProperty(globalThis, "LanguageModel", { configurable: true, value: {
-      availability: async () => "available",
-      create: async () => ({ destroy() {}, prompt: async (input) => {
-        if (Array.isArray(input)) return JSON.stringify({ block: true, rule: "Story events" });
-        const text = String(input);
-        const lines = JSON.parse(text.slice(text.lastIndexOf("Snippets:\\n") + 10));
-        return JSON.stringify({ decisions: lines.map(item => ({ i: item.i, block: item.text.includes("captain quietly"), rule: "Story events" })) });
-      } })
-    } });
-  ` });
-  assert(!installModel.exceptionDetails, JSON.stringify(installModel.exceptionDetails));
   await worker.evaluate(async () => {
     const data = await chrome.storage.sync.get("spoilt.settings");
     await chrome.storage.sync.set({ "spoilt.settings": { ...data["spoilt.settings"], prefetchLinks: true, useLocalAI: true } });
@@ -189,6 +207,9 @@ async function verifyPreparedAnalysis(page, port, worker, extensionId) {
       } });
     }
   });
+  assert((await engine.evaluate(() => globalThis.__modelCalls)) > 0, "The extension document did not run pre-analysis");
+  // Remove the inference host before navigation: the destination must use cache.
+  await engine.close();
   await page.locator("#target").click();
   await page.waitForURL(`http://127.0.0.1:${port}/prepared/target`);
   await page.waitForSelector("h1 .spoilt-redacted-text");
@@ -198,9 +219,8 @@ async function verifyPreparedAnalysis(page, port, worker, extensionId) {
   assert(frames.some((frame) => frame.visible), "The destination eventually becomes visible");
   assert(frames.every((frame) => !frame.visible || (frame.redacted && frame.imageSafe)), `Spoiler appeared in a visible frame: ${JSON.stringify(frames)}`);
   assert.equal(await page.locator("h1 .spoilt-redacted-text").textContent(), spoiler);
-  // The source model was injected only into the source's isolated world. The
-  // destination has no mock, so the observed masking must come from the cache.
-  await cdp.detach();
+  // No content world has a model mock and the inference document is closed.
+  // The destination's observed masking must come from prepared decisions.
   await page.close();
 }
 
@@ -285,33 +305,9 @@ async function verifyRecoverableModelFailure(page, fixturePort, worker, extensio
     });
   });
 
-  const cdp = await page.context().newCDPSession(page);
-  const contexts = [];
-  cdp.on("Runtime.executionContextCreated", ({ context }) => {
-    if (context.name === "Spoilt" && context.origin === `chrome-extension://${extensionId}`) {
-      contexts.push(context.id);
-    }
-  });
-  await cdp.send("Runtime.enable");
+  let engine = await openMockNativeEngine(page.context(), extensionId, { failCreate: true });
+  await page.bringToFront();
   await page.goto(`http://127.0.0.1:${fixturePort}/tests/test-page.html`);
-  await waitFor(() => contexts.length > 0, 5000, "Spoilt's isolated content-script world was not created.");
-  await cdp.send("Runtime.evaluate", {
-    contextId: contexts.at(-1),
-    expression: `
-      Object.defineProperty(globalThis, "LanguageModel", {
-        configurable: true,
-        value: {
-          availability: async () => "available",
-          create: async () => {
-            throw new DOMException(
-              "The device is unable to create a session to run the model. Please check the result of availability() first.",
-              "InvalidStateError"
-            );
-          }
-        }
-      });
-    `,
-  });
 
   await worker.evaluate(async () => {
     const result = await chrome.storage.sync.get("spoilt.settings");
@@ -321,8 +317,15 @@ async function verifyRecoverableModelFailure(page, fixturePort, worker, extensio
   });
   await waitFor(async () => worker.evaluate(async () => {
     const status = (await chrome.storage.local.get("spoilt.status"))["spoilt.status"];
-    return status?.aiText === "recovering" && status?.lastError === "";
-  }), 5000, "The model creation failure was not converted into a recoverable state.");
+    return status?.aiText === "fallback" && status?.lastError === "";
+  }), 5000, "The model creation failure did not fall back cleanly.");
+  assert((await engine.evaluate(() => globalThis.__modelCreates)) >= 2, "Expected a bounded native creation retry in extension context");
+  await engine.close();
+  engine = await openMockNativeEngine(page.context(), extensionId);
+  await page.bringToFront();
+  await waitFor(async () => (await engine.evaluate(() => globalThis.__modelCalls)) > 0
+    && await worker.evaluate(async () => (await chrome.storage.local.get("spoilt.status"))["spoilt.status"]?.aiText === "available"),
+  5000, "On-device analysis did not retry the static page after model setup, without a reload.");
 
   await worker.evaluate(async () => {
     const result = await chrome.storage.sync.get("spoilt.settings");
@@ -330,7 +333,7 @@ async function verifyRecoverableModelFailure(page, fixturePort, worker, extensio
       "spoilt.settings": { ...result["spoilt.settings"], useVision: true },
     });
   });
-  await cdp.detach();
+  await engine.close();
   await page.close();
 }
 

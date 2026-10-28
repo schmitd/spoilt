@@ -1,78 +1,61 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeMemory } from "../core/memory";
 import { DEFAULT_SETTINGS } from "../core/settings";
 import { AiClassifier } from "./ai-classifier";
 
-const { updateStatus } = vi.hoisted(() => ({
-  updateStatus: vi.fn(async (_patch: Record<string, unknown>) => undefined),
-}));
+const { sendMessage } = vi.hoisted(() => ({ sendMessage: vi.fn<(message: any) => Promise<unknown>>() }));
+vi.mock("wxt/browser", () => ({ browser: { runtime: { sendMessage } } }));
 
-vi.mock("../platform/storage", () => ({ updateStatus }));
-vi.mock("../platform/ai-lease", () => ({
-  withAiLease: vi.fn(async (_kind: string, operation: () => Promise<unknown>) => operation()),
-}));
-vi.mock("wxt/browser", () => ({ browser: { runtime: { sendMessage: vi.fn() } } }));
+beforeEach(() => { sendMessage.mockReset(); vi.stubGlobal("LanguageModel", undefined); });
+afterEach(() => { document.body.innerHTML = ""; vi.unstubAllGlobals(); });
 
-describe("AiClassifier", () => {
-  beforeEach(() => {
-    updateStatus.mockClear();
-  });
+function candidate(text = "The captain quietly survives the battle") {
+  document.body.innerHTML = "<p></p>";
+  const node = document.createTextNode(text);
+  document.querySelector("p")!.append(node);
+  return { node, text };
+}
 
-  it("queues recovery and retries a cancelled text request without surfacing an error", async () => {
-    const firstSession = {
-      prompt: vi.fn(async () => { throw new DOMException("The request was cancelled.", "AbortError"); }),
-      destroy: vi.fn(),
-    };
-    const secondSession = {
-      prompt: vi.fn(async () => '{"decisions":[{"i":0,"block":true,"rule":"Plot spoilers"}]}'),
-      destroy: vi.fn(),
-    };
-    const create = vi.fn()
-      .mockResolvedValueOnce(firstSession)
-      .mockResolvedValueOnce(secondSession);
-    vi.stubGlobal("LanguageModel", {
-      availability: vi.fn(async () => "available"),
-      create,
-    });
-
-    const parent = document.createElement("p");
-    const node = document.createTextNode("The finale reveals the winner.");
-    parent.append(node);
-    document.body.append(parent);
+describe("AiClassifier extension bridge", () => {
+  it("classifies through the extension host when the content world has no LanguageModel", async () => {
+    sendMessage.mockResolvedValue({ ok: true, decisions: [{ i: 0, block: true, rule: "Story" }] });
     const onMatch = vi.fn();
-
-    await new AiClassifier().text(
-      [{ node, text: node.data }],
-      DEFAULT_SETTINGS,
-      normalizeMemory(),
-      onMatch,
-      () => true,
-    );
-
-    expect(create).toHaveBeenCalledTimes(2);
-    expect(firstSession.destroy).toHaveBeenCalledOnce();
+    await new AiClassifier().text([candidate()], DEFAULT_SETTINGS, normalizeMemory(), onMatch, () => true);
     expect(onMatch).toHaveBeenCalledOnce();
-    expect(updateStatus.mock.calls.some(([patch]) => (
-      typeof patch.lastError === "string" && patch.lastError.includes("AbortError")
-    ))).toBe(false);
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ scope: "spoilt-native", type: "classify", input: { kind: "text", texts: ["The captain quietly survives the battle"] } }));
   });
 
-  it("discards a response when its page or configuration changed during the prompt", async () => {
-    let finish!: (value: string) => void;
-    const prompt = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
-    vi.stubGlobal("LanguageModel", {
-      availability: async () => "available",
-      create: async () => ({ prompt, destroy: vi.fn() }),
-    });
-    document.body.innerHTML = "<p>An old spoiler snapshot</p>";
-    const node = document.querySelector("p")!.firstChild as Text;
+  it("discards responses after the source page changed", async () => {
+    let finish!: (value: unknown) => void;
+    sendMessage.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     let current = true;
     const onMatch = vi.fn();
-    const work = new AiClassifier().text([{ node, text: node.data }], DEFAULT_SETTINGS, normalizeMemory(), onMatch, () => current);
-    await vi.waitFor(() => expect(prompt).toHaveBeenCalledOnce());
+    const work = new AiClassifier().text([candidate()], DEFAULT_SETTINGS, normalizeMemory(), onMatch, () => current);
     current = false;
-    finish('{"decisions":[{"i":0,"block":true,"rule":"Story"}]}');
+    finish({ ok: true, decisions: [{ i: 0, block: true }] });
     await work;
+    expect(onMatch).not.toHaveBeenCalled();
+  });
+
+  it("cancels an outstanding owned request on reset and ignores a late response", async () => {
+    let finish!: (value: unknown) => void;
+    sendMessage.mockImplementation((message: any) => message.type === "cancel"
+      ? Promise.resolve({ ok: false, reason: "cancelled" }) : new Promise((resolve) => { finish = resolve; }));
+    const classifier = new AiClassifier();
+    const onMatch = vi.fn();
+    const work = classifier.text([candidate()], DEFAULT_SETTINGS, normalizeMemory(), onMatch, () => true);
+    await classifier.reset();
+    await work;
+    expect(sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: "cancel" }));
+    finish({ ok: true, decisions: [{ i: 0, block: true }] });
+    await Promise.resolve();
+    expect(onMatch).not.toHaveBeenCalled();
+  });
+
+  it("leaves direct protection active when no analysis host is open", async () => {
+    sendMessage.mockResolvedValue({ ok: false, reason: "unavailable" });
+    const onMatch = vi.fn();
+    await new AiClassifier().text([candidate()], DEFAULT_SETTINGS, normalizeMemory(), onMatch, () => true);
     expect(onMatch).not.toHaveBeenCalled();
   });
 });

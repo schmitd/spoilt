@@ -11,6 +11,20 @@ vi.mock("../platform/storage", () => ({ updateStatus: vi.fn() }));
 afterEach(() => { document.body.innerHTML = ""; });
 
 describe("prepared page analysis", () => {
+  it("cancels native analysis immediately when prefetching is aborted", async () => {
+    const send = vi.mocked(browser.runtime.sendMessage);
+    send.mockReset();
+    send.mockImplementation((message: any) => message.type === "cancel" ? Promise.resolve(undefined) : new Promise(() => undefined));
+    const controller = new AbortController();
+    const work = precomputePage("https://example.com/story", "<article><p>An ordinary scene in an upcoming episode</p></article>", {
+      ...DEFAULT_SETTINGS, prefetchLinks: true, scanImages: false, rules: [],
+    }, normalizeMemory(), controller.signal);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ scope: "spoilt-native", type: "classify" })));
+    controller.abort();
+    await work;
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ scope: "spoilt-native", type: "cancel" }));
+    expect(send.mock.calls.some(([message]) => (message as { type?: string }).type === "savePrefetchAnalysis")).toBe(false);
+  });
   it.each([{ remove: [25] }, { remove: [24, 25, 26] }])("continues after hydration detaches siblings $remove between chunks", async ({ remove }) => {
     const text = "The captain quietly survives the battle";
     const applier = new PreparedTextApplier(new Redactor(), { ...DEFAULT_SETTINGS, scanImages: false, maxTextNodesPerScan: 50 }, {
@@ -57,7 +71,7 @@ describe("prepared page analysis", () => {
   it.each(["failed", "no-store", "oversize"])("caps speculative image attempts for %s responses", async (kind) => {
     const request = vi.spyOn(globalThis, "fetch").mockImplementation(async () => kind === "failed" ? new Response(null, { status: 404 })
       : new Response("bytes", { headers: { "content-type": "image/png", ...(kind === "no-store" ? { "cache-control": "no-store" } : { "content-length": "2000000" }) } }));
-    vi.stubGlobal("LanguageModel", { availability: async () => "available" });
+    vi.mocked(browser.runtime.sendMessage).mockImplementation(async () => ({ ok: true, text: true, image: true }) as never);
     try {
       const html = Array.from({ length: 20 }, (_, i) => `<img src="/failed-${i}.png" alt="A scene">`).join("");
       await precomputePage("https://example.com/story", html, { ...DEFAULT_SETTINGS, prefetchLinks: true, scanText: false, useLocalAI: true, useVision: true, rules: [] }, normalizeMemory(), new AbortController().signal);

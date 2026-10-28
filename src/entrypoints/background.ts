@@ -5,6 +5,7 @@ import { fetchImageDataUrl, clearMemory, loadMemory, refreshSpoilerMemory } from
 import { summarizeMemory } from "../core/memory";
 import { LeaseQueue } from "../core/lease-queue";
 import { loadSettings, loadStatus } from "../platform/storage";
+import { installNativeAiBroker } from "../platform/native-ai-broker";
 
 const MEMORY_ALARM = "spoilt.memory.refresh";
 const aiLeases = new LeaseQueue();
@@ -12,6 +13,7 @@ const aiLeaseTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const AI_LEASE_MAX_MS = 180_000;
 
 export default defineBackground(() => {
+  installNativeAiBroker();
   browser.runtime.onInstalled.addListener(() => { void ensureMemoryAlarm(); });
   browser.runtime.onStartup.addListener(() => { void ensureMemoryAlarm(); });
   browser.alarms.onAlarm.addListener((alarm) => {
