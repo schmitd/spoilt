@@ -7,9 +7,10 @@ import net from "node:net";
 import { chromium } from "@playwright/test";
 
 const root = resolve(import.meta.dirname, "..");
-const extensionPath = resolve(root, ".output/chrome-mv3");
+const extensionPath = process.env.SPOILT_EXTENSION_PATH ? resolve(process.env.SPOILT_EXTENSION_PATH) : resolve(root, ".output/chrome-mv3");
 const artifactDir = resolve(root, ".artifacts/release");
 const fixturePort = await freePort();
+const prefetchRequests = new Map();
 const fixtureServer = createFixtureServer(root);
 await new Promise((resolveReady) => fixtureServer.listen(fixturePort, "127.0.0.1", resolveReady));
 await mkdir(artifactDir, { recursive: true });
@@ -25,7 +26,14 @@ const context = await chromium.launchPersistentContext("", {
 
 try {
   let [worker] = context.serviceWorkers();
-  if (!worker) worker = await context.waitForEvent("serviceworker");
+  if (!worker) {
+    // Chromium may delay loading unpacked extensions until a tab is opened.
+    const startup = await context.newPage();
+    await startup.goto("chrome://extensions");
+    await waitFor(() => context.serviceWorkers().length > 0, 30000, "Extension service worker did not start");
+    [worker] = context.serviceWorkers();
+    await startup.close();
+  }
   const extensionId = new URL(worker.url()).host;
 
   console.log("verify global AI lease");
@@ -39,11 +47,221 @@ try {
   console.log("verify content script");
   await verifyContentScript(await context.newPage(), fixturePort, worker);
 
+  console.log("verify link prefetch and navigation cache reuse");
+  await verifyLinkPrefetch(await context.newPage(), fixturePort, worker);
+
+  console.log("verify direct keyword preparation and dynamic updates");
+  await verifyPreparedKeywords(await context.newPage(), fixturePort, worker);
+  console.log("verify prepared results in a new tab with CDN images");
+  await verifyPreparedKeywords(await context.newPage(), fixturePort, worker, true);
+  console.log("verify prepared AI results before first visible frame");
+  await verifyPreparedAnalysis(await context.newPage(), fixturePort, worker, extensionId);
+
   console.log(`extension-smoke.mjs passed (${extensionId})`);
   console.log(`screenshots: ${artifactDir}`);
 } finally {
   await context.close();
   fixtureServer.close();
+}
+
+async function verifyPreparedKeywords(page, port, worker, newTab = false) {
+  await worker.evaluate(async () => {
+    await chrome.storage.sync.set({ "spoilt.settings": {
+      enabled: true, prefetchLinks: true, useLocalAI: false, useVision: false,
+      scanText: true, scanImages: true, memoryEnabled: false,
+      rules: [{ id: "restricted", name: "Restricted topic", description: "", keywords: ["exampleterm"], enabled: true }],
+    } });
+  });
+  await page.context().addInitScript(() => {
+    if (location.pathname !== "/keyword/target") return;
+    window.__keywordFrames = [];
+    const check = () => {
+      const h = document.querySelector("article h1");
+      if (h) {
+        const image = document.querySelector("picture img");
+        window.__keywordFrames.push({ visible: getComputedStyle(document.documentElement).opacity !== "0", masked: !!h.querySelector(".spoilt-redacted-text"), imageSafe: !!image?.closest(".spoilt-image-shell") && getComputedStyle(image).visibility === "hidden" });
+      }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+  await page.goto(`http://127.0.0.1:${port}/keyword/source`);
+  await page.waitForTimeout(500);
+  const link = page.locator(newTab ? "#target-new" : "#target");
+  await link.hover();
+  await waitFor(async () => worker.evaluate(async () => {
+    const entries = await chrome.storage.session.get(null);
+    return Object.entries(entries).some(([key, value]) => key.startsWith("spoilt.prefetch.") && value?.matches?.some((item) => item.text === "exampleterm article headline" && item.ai === false));
+  }), 10000, "Keyword decision was not prepared");
+  const opened = newTab ? page.context().waitForEvent("page") : null;
+  await link.click();
+  const destination = opened ? await opened : page;
+  await destination.waitForURL(`http://127.0.0.1:${port}/keyword/target`);
+  await destination.waitForSelector("article h1 .spoilt-redacted-text");
+  await destination.waitForSelector("picture img", { state: "attached" });
+  await destination.waitForTimeout(200);
+  const frames = await destination.evaluate(() => window.__keywordFrames);
+  assert(frames.some((frame) => frame.visible));
+  assert(frames.every((frame) => !frame.visible || (frame.masked && frame.imageSafe)), `Keyword appeared in visible frame: ${JSON.stringify(frames)}`);
+  // Repeated unrelated DOM activity must not indefinitely postpone redaction.
+  await destination.evaluate(() => {
+    window.__noise = setInterval(() => document.querySelector("#noise").append(document.createElement("i")), 25);
+    const p = document.createElement("p"); p.id = "dynamic-match"; p.textContent = "exampleterm dynamically added";
+    document.querySelector("article").append(p);
+  });
+  await destination.waitForSelector("#dynamic-match .spoilt-redacted-text", { timeout: 1500 });
+  await destination.evaluate(() => clearInterval(window.__noise));
+  await destination.evaluate(() => {
+    const image = document.createElement("img"); image.id = "late-image";
+    image.alt = "exampleterm late image"; image.src = "/keyword/late-image.svg";
+    document.querySelector("article").append(image);
+  });
+  await destination.waitForSelector(".spoilt-image-shell #late-image", { state: "attached", timeout: 2000 });
+  if (destination !== page) await destination.close();
+  await page.close();
+}
+
+async function verifyPreparedAnalysis(page, port, worker, extensionId) {
+  const spoiler = "The captain quietly survives the battle";
+  await worker.evaluate(async () => {
+    await chrome.storage.sync.set({ "spoilt.settings": {
+      enabled: true, prefetchLinks: false, useLocalAI: false, useVision: true,
+      scanText: true, scanImages: true, memoryEnabled: false,
+      rules: [{ id: "story", name: "Story events", description: "Story outcomes", keywords: ["unmatchedkeyword"], enabled: true }],
+    } });
+  });
+  await page.addInitScript(() => {
+    if (!location.pathname.startsWith("/prepared/target")) return;
+    window.__spoiltFrames = [];
+    const check = () => {
+      const headline = document.querySelector("h1");
+      if (headline) {
+        const rootOpacity = getComputedStyle(document.documentElement).opacity;
+        const span = headline.querySelector(".spoilt-redacted-text");
+        const image = document.querySelector("img");
+        window.__spoiltFrames.push({ visible: rootOpacity !== "0", redacted: !!span && getComputedStyle(span).color === "rgba(0, 0, 0, 0)",
+          imageSafe: !image || (!!image.closest(".spoilt-image-shell") && getComputedStyle(image).visibility === "hidden") });
+      }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+  const cdp = await page.context().newCDPSession(page);
+  const contexts = [];
+  cdp.on("Runtime.executionContextCreated", ({ context }) => {
+    if (context.name === "Spoilt" && context.origin === `chrome-extension://${extensionId}`) contexts.push(context.id);
+  });
+  await cdp.send("Runtime.enable");
+  await page.goto(`http://127.0.0.1:${port}/prepared/source`);
+  await waitFor(() => contexts.length > 0, 5000, "Missing source content script context");
+  const nativeModel = await cdp.send("Runtime.evaluate", { contextId: contexts.at(-1), expression: 'typeof LanguageModel', returnByValue: true });
+  console.log(`native Prompt API in isolated test browser: ${nativeModel.result.value}`);
+  const installModel = await cdp.send("Runtime.evaluate", { contextId: contexts.at(-1), expression: `
+    Object.defineProperty(globalThis, "LanguageModel", { configurable: true, value: {
+      availability: async () => "available",
+      create: async () => ({ destroy() {}, prompt: async (input) => {
+        if (Array.isArray(input)) return JSON.stringify({ block: true, rule: "Story events" });
+        const text = String(input);
+        const lines = JSON.parse(text.slice(text.lastIndexOf("Snippets:\\n") + 10));
+        return JSON.stringify({ decisions: lines.map(item => ({ i: item.i, block: item.text.includes("captain quietly"), rule: "Story events" })) });
+      } })
+    } });
+  ` });
+  assert(!installModel.exceptionDetails, JSON.stringify(installModel.exceptionDetails));
+  await worker.evaluate(async () => {
+    const data = await chrome.storage.sync.get("spoilt.settings");
+    await chrome.storage.sync.set({ "spoilt.settings": { ...data["spoilt.settings"], prefetchLinks: true, useLocalAI: true } });
+  });
+  await page.waitForTimeout(500);
+  await page.locator("#target").hover();
+  try { await waitFor(async () => worker.evaluate(async (text) => {
+    const entries = await chrome.storage.session.get(null);
+    return Object.entries(entries).some(([key, value]) => key.startsWith("spoilt.prefetch.") && value?.matches?.some((item) => item.text === text) && value?.images?.length === 1);
+  }, spoiler), 15000, "AI decision for the prefetched page was not saved"); } catch (error) {
+    console.log("prefetch diagnostics", await worker.evaluate(async () => ({ session: await chrome.storage.session.get(null), local: await chrome.storage.local.get("spoilt.status") })));
+    throw error;
+  }
+  await page.locator("#target").click();
+  await page.waitForURL(`http://127.0.0.1:${port}/prepared/target`);
+  await page.waitForSelector("h1 .spoilt-redacted-text");
+  await page.waitForSelector(".spoilt-image-shell img", { state: "attached" });
+  await page.waitForTimeout(200);
+  const frames = await page.evaluate(() => window.__spoiltFrames);
+  assert(frames.some((frame) => frame.visible), "The destination eventually becomes visible");
+  assert(frames.every((frame) => !frame.visible || (frame.redacted && frame.imageSafe)), `Spoiler appeared in a visible frame: ${JSON.stringify(frames)}`);
+  assert.equal(await page.locator("h1 .spoilt-redacted-text").textContent(), spoiler);
+  // The source model was injected only into the source's isolated world. The
+  // destination has no mock, so the observed masking must come from the cache.
+  await cdp.detach();
+  await page.close();
+}
+
+async function verifyLinkPrefetch(page, port, worker) {
+  const setPrefetch = (enabled, protection = true) => worker.evaluate(async ({ enabled, protection }) => {
+    const result = await chrome.storage.sync.get("spoilt.settings");
+    await chrome.storage.sync.set({ "spoilt.settings": {
+      ...result["spoilt.settings"], enabled: protection, prefetchLinks: enabled,
+      useLocalAI: false, memoryEnabled: false,
+    } });
+  }, { enabled, protection });
+  await setPrefetch(false);
+  await page.goto(`http://127.0.0.1:${port}/prefetch/source`);
+  await page.waitForTimeout(300);
+  await page.locator("#article").hover();
+  await page.waitForTimeout(250);
+  assert.equal(prefetchRequests.get("/prefetch/article") || 0, 0, "Opt-out must not fetch");
+  await setPrefetch(true);
+  await page.waitForTimeout(300);
+  await page.mouse.move(600, 400);
+  await page.locator("#article").hover();
+  await page.mouse.move(600, 400);
+  await page.waitForTimeout(200);
+  assert.equal(prefetchRequests.get("/prefetch/article") || 0, 0, "Brief hover must not fetch");
+  const fetched = page.waitForResponse((response) => response.url().endsWith("/prefetch/article"));
+  await page.locator("#article").hover();
+  await (await fetched).finished();
+  assert.equal(prefetchRequests.get("/prefetch/article"), 1);
+  await page.mouse.move(600, 400);
+  await page.locator("#article").hover();
+  await page.waitForTimeout(250);
+  assert.equal(prefetchRequests.get("/prefetch/article"), 1, "Repeated hover is deduplicated");
+  await page.locator("#unsafe").hover();
+  await page.waitForTimeout(250);
+  assert.equal(prefetchRequests.get("/prefetch/logout") || 0, 0);
+  // Focus on a dynamically inserted link is also an intent signal.
+  await page.evaluate(() => {
+    const a = document.createElement("a");
+    a.id = "dynamic"; a.href = "/prefetch/keyboard"; a.textContent = "Keyboard article";
+    document.body.append(a);
+  });
+  const keyboardFetch = page.waitForResponse((response) => response.url().endsWith("/prefetch/keyboard"));
+  await page.locator("#dynamic").focus();
+  await (await keyboardFetch).finished();
+  await setPrefetch(true, false);
+  await page.waitForTimeout(300);
+  await page.locator("#disabled").hover();
+  await page.waitForTimeout(250);
+  assert.equal(prefetchRequests.get("/prefetch/disabled") || 0, 0, "Disabling protection stops prefetch");
+  await page.locator("#article").click();
+  await page.waitForURL(`http://127.0.0.1:${port}/prefetch/article`);
+  assert.equal(await page.locator("h1").textContent(), "Prefetched article");
+  assert.equal(prefetchRequests.get("/prefetch/article"), 1, "Navigation must reuse cached HTML without a second server request");
+  await setPrefetch(true);
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    for (let i = 0; i < 10; i++) {
+      const a = document.createElement("a");
+      a.id = `budget-${i}`; a.href = `/prefetch/budget-${i}`; a.textContent = `Page ${i}`;
+      document.body.append(a);
+    }
+  });
+  for (let i = 0; i < 10; i++) {
+    await page.locator(`#budget-${i}`).focus();
+    await page.waitForTimeout(200);
+  }
+  const budgetRequests = [...prefetchRequests].filter(([url]) => url.startsWith("/prefetch/budget-"));
+  assert.equal(budgetRequests.length, 8, "Speculation is limited to eight requests per document");
+  await page.close();
 }
 
 async function verifyRecoverableModelFailure(page, fixturePort, worker, extensionId) {
@@ -309,6 +527,48 @@ function createFixtureServer(basePath) {
   return createServer(async (request, response) => {
     try {
       const pathname = new URL(request.url || "/", "http://localhost").pathname;
+      if (pathname === "/keyword/late-image.svg") {
+        response.setHeader("Content-Type", "image/svg+xml");
+        setTimeout(() => response.end('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="red"/></svg>'), 300);
+        return;
+      }
+      if (pathname === "/keyword/topic-image.png") {
+        response.setHeader("Content-Type", "image/png");
+        response.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0yQAAAAASUVORK5CYII=", "base64"));
+        return;
+      }
+      if (pathname.startsWith("/keyword/")) {
+        response.setHeader("Content-Type", "text/html; charset=utf-8");
+        response.setHeader("Cache-Control", "private, max-age=600");
+        response.end(pathname === "/keyword/source"
+          ? '<!doctype html><a id="target" href="/keyword/target">Article</a><a id="target-new" href="/keyword/target" target="_blank" rel="noopener noreferrer">Open article in a new tab</a>'
+          : `<!doctype html><nav>${Array.from({length: 100}, (_, i) => `<a>Menu entry ${i}</a>`).join("")}</nav><article><h1>exampleterm article headline</h1><picture><source srcset="http://localhost:${fixturePort}/keyword/topic-image.png?width=800 800w"><img src="http://localhost:${fixturePort}/keyword/topic-image.png?width=640" alt="exampleterm photo" width="64" height="64"></picture></article><div id="noise"></div>`);
+        return;
+      }
+      if (pathname === "/prepared/image.png") {
+        response.setHeader("Content-Type", "image/png");
+        response.setHeader("Cache-Control", "private, max-age=600");
+        response.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0yQAAAAASUVORK5CYII=", "base64"));
+        return;
+      }
+      if (pathname.startsWith("/prepared/")) {
+        if (pathname === "/prepared/target") response.setHeader("Content-Security-Policy", "style-src 'none'");
+        response.setHeader("Content-Type", "text/html; charset=utf-8");
+        response.setHeader("Cache-Control", "private, max-age=600");
+        response.end(pathname === "/prepared/source"
+          ? '<!doctype html><a id="target" href="/prepared/target">Read the story</a>'
+          : '<!doctype html><h1>The captain quietly survives the battle</h1><img src="/prepared/image.png" alt="A scene" width="64" height="64">');
+        return;
+      }
+      if (pathname.startsWith("/prefetch/")) {
+        prefetchRequests.set(pathname, (prefetchRequests.get(pathname) || 0) + 1);
+        response.setHeader("Content-Type", "text/html");
+        response.setHeader("Cache-Control", "private, max-age=600");
+        response.end(pathname === "/prefetch/source"
+          ? '<!doctype html><a id="article" href="/prefetch/article">Article</a><br><a id="unsafe" href="/prefetch/logout">Logout</a><br><a id="disabled" href="/prefetch/disabled">Disabled article</a>'
+          : '<!doctype html><h1>Prefetched article</h1>');
+        return;
+      }
       if (pathname === "/favicon.ico") {
         response.statusCode = 204;
         response.end();

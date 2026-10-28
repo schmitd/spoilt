@@ -146,7 +146,7 @@ export async function promptImageInput(element: Element): Promise<Element | Blob
   }
 }
 
-function shouldSkipElement(element: Element): boolean {
+export function shouldSkipElement(element: Element): boolean {
   if (element.closest(`.${MASKED_TEXT_CLASS}, .${IMAGE_SHELL_CLASS}, .${BACKGROUND_CLASS}`)) return true;
   const tag = element.tagName.toLowerCase();
   return ["script", "style", "noscript", "template", "textarea", "input", "select", "option", "code", "pre", "kbd", "samp"].includes(tag)
@@ -154,25 +154,48 @@ function shouldSkipElement(element: Element): boolean {
     || element.getAttribute("aria-hidden") === "true";
 }
 
-function isVisible(element: Element): boolean {
+export function isVisible(element: Element): boolean {
   const style = getComputedStyle(element);
   if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
   const rect = element.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
 }
 
-function imageMetadata(element: Element): string {
+export function imageMetadata(element: Element, baseUrl = location.href): string {
   const image = promptImageElement(element);
   const parts = [
     image.getAttribute("alt"),
     image.getAttribute("title"),
     image.getAttribute("aria-label"),
     image.getAttribute("poster"),
-    image instanceof HTMLImageElement ? image.currentSrc : "",
-    image instanceof HTMLImageElement ? image.src : "",
+    ...imageSourceUrls(image, baseUrl),
     nearestCaptionText(element),
   ];
   return normalizeWhitespace(parts.filter(Boolean).join(" ")).slice(0, 1000);
+}
+
+export function imageSourceUrls(element: Element, baseUrl: string): string[] {
+  const image = promptImageElement(element);
+  const values = [image instanceof HTMLImageElement ? image.currentSrc : "", image.getAttribute("src"), image.getAttribute("data-src"), image.getAttribute("poster"), image.getAttribute("href")];
+  const sets = [image.getAttribute("srcset"), image.getAttribute("data-srcset")];
+  const picture = image.closest("picture");
+  if (picture) for (const source of picture.querySelectorAll("source[srcset]")) sets.push(source.getAttribute("srcset"));
+  for (const set of sets) {
+    // Responsive image URLs are comma-separated, followed by width/density.
+    // Data URLs are intentionally excluded from metadata identities.
+    if (!set || /^data:/i.test(set)) continue;
+    values.push(...set.split(",").map((entry) => entry.trim().split(/\s+/)[0] || ""));
+  }
+  const urls = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    try {
+      const url = new URL(value, baseUrl);
+      if (/^https?:$/.test(url.protocol)) urls.add(url.href);
+    } catch { /* Ignore malformed image sources. */ }
+    if (urls.size >= 8) break;
+  }
+  return [...urls];
 }
 
 function promptImageElement(element: Element): Element {

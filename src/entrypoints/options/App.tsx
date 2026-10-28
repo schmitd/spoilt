@@ -121,6 +121,7 @@ export function App() {
           <div class="control-list">
             <Toggle checked={draft.enabled} onChange={(enabled) => patch({ enabled })} label="Enable protection" detail="Apply your boundaries while you browse." />
             <Toggle checked={draft.scanText} onChange={(scanText) => patch({ scanText })} label="Check visible text" detail="Conceal matching headlines, posts, comments, and article text." />
+            <Toggle checked={draft.prefetchLinks} onChange={(prefetchLinks) => patch({ prefetchLinks })} label="Prefetch likely links" detail="Load and analyze same-site pages when you hover or focus a link. Uses extra data and sends requests with site cookies before you click." />
             <Toggle checked={draft.scanImages} onChange={(scanImages) => patch({ scanImages })} label="Check images" detail="Conceal images when their descriptions or on-device analysis match." />
           </div>
           <label class="field">

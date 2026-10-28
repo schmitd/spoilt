@@ -1,3 +1,7 @@
+html[data-spoilt-preparing] {
+  opacity: 0 !important;
+}
+
 .spoilt-redacted-text {
   box-decoration-break: clone !important;
   -webkit-box-decoration-break: clone !important;
