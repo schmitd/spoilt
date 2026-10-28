@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Spoilt: On-device analysis</title></head>
+  <body>
+    <main data-native-host="connecting">
+      <p class="brand">Spoilt</p>
+      <h1>On-device analysis</h1>
+      <p>Keep this tab open while you browse so Spoilt can analyze text and images locally. Page content is processed in memory on this device and is never sent to an AI server.</p>
+      <p>Chrome may download a model of several gigabytes after you choose Prepare below. Downloading uses your internet connection and storage. Availability depends on Chrome, your profile, supported hardware, and free disk space.</p>
+      <p>Keyword and description matching remain active when the model is unavailable or this tab is closed.</p>
+      <section aria-labelledby="text-title"><h2 id="text-title">Text analysis</h2><p id="text-state" role="status">Checking availability…</p><button id="prepare-text" type="button" disabled>Prepare on-device text analysis</button></section>
+      <section aria-labelledby="image-title"><h2 id="image-title">Image analysis</h2><p id="image-state" role="status">Checking availability…</p><button id="prepare-image" type="button" disabled>Prepare on-device image analysis</button></section>
+      <p id="connection" role="status">Connecting to Spoilt…</p>
+      <p><a href="https://developer.chrome.com/docs/ai/get-started#requirements" target="_blank" rel="noreferrer">Chrome model and hardware requirements</a></p>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

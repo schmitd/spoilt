@@ -69,6 +69,9 @@ export async function precomputePage(url: string, html: string, settings: Settin
   }
   const signature = analysisSignature(settings, memory);
   const classifier = new AiClassifier();
+  const cancel = () => { void classifier.reset(); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
   const save = async () => {
     if (signal.aborted || (!matches.length && !images.length)) return;
     await browser.runtime.sendMessage({ scope: "spoilt", type: "savePrefetchAnalysis", analysis: {
@@ -93,16 +96,11 @@ export async function precomputePage(url: string, html: string, settings: Settin
     }, () => !signal.aborted, save);
     await save();
   }
-  if (!signal.aborted && settings.useLocalAI && settings.scanImages && settings.useVision && typeof LanguageModel !== "undefined") {
+  if (!signal.aborted && settings.useLocalAI && settings.scanImages && settings.useVision) {
     // Only fetch a small number of ordinary same-origin images, and only if the
     // on-device vision model is already available. Never retain image bytes.
     try {
-      const available = await LanguageModel.availability({
-        expectedInputs: [{ type: "text", languages: ["en"] }, { type: "image" }],
-        expectedOutputs: [{ type: "text", languages: ["en"] }],
-        initialPrompts: [{ role: "system", content: "Classify only against the user's boundaries. Prefer false when uncertain." }],
-      });
-      if (available === "available" && !signal.aborted) {
+      if (await classifier.visionAvailable() && !signal.aborted) {
         const inputs = (await collectPrefetchedImages(html, url, signal)).filter(({ candidate }) => !images.some((item) => item.url === (candidate.element as HTMLImageElement).src));
         await classifier.prefetchedImages(inputs, settings, memory, (candidate, match) => {
           const element = candidate.element as HTMLImageElement;
@@ -112,6 +110,10 @@ export async function precomputePage(url: string, html: string, settings: Settin
     } catch { /* Vision precomputation is optional; normal page scanning remains active. */ }
   }
   if (images.length) await save();
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    await classifier.reset();
+  }
 }
 
 async function collectPrefetchedImages(html: string, pageUrl: string, signal: AbortSignal): Promise<Array<{ candidate: { element: Element; metadataText: string }; blob: Blob }>> {

@@ -2,6 +2,7 @@ import { browser } from "wxt/browser";
 import { memoryMatch, normalizeMemory } from "../core/memory";
 import { descriptionMatch, keywordMatch, normalizeWhitespace } from "../core/matching";
 import { MEMORY_KEY, STATUS_KEY } from "../core/status";
+import { NATIVE_RETRY_KEY } from "../core/native-ai-protocol";
 import type { Settings, SpoilerMemory } from "../core/types";
 import { loadSettings, updateStatus } from "../platform/storage";
 import { loadMemory } from "../services/memory-service";
@@ -35,6 +36,13 @@ export class ContentController {
   async start(): Promise<void> {
     browser.runtime.onMessage.addListener((message: unknown) => this.#handleMessage(message));
     browser.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes[NATIVE_RETRY_KEY]) {
+        if (!this.#starting && this.#settings?.enabled && this.#settings.useLocalAI) {
+          this.#collector.reset();
+          this.schedule(0);
+        }
+        return;
+      }
       if (!((area === "sync" && changes["spoilt.settings"]) || (area === "local" && changes[MEMORY_KEY]))) return;
       if (this.#starting) this.#configurationChanged = true;
       else void this.#reloadSettings();
@@ -277,6 +285,7 @@ export class ContentController {
     if (location.href === this.#url || !this.#settings) return;
     this.#url = location.href;
     this.#run += 1;
+    void this.#ai.reset();
     window.clearTimeout(this.#saveTimer);
     this.#saveTimer = 0;
     this.#prepared?.stop();

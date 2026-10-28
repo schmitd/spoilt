@@ -115,7 +115,6 @@ export function App() {
         </dl>
         {status.aiReason && <p>{status.aiReason}</p>}
         <Button tone="quiet" icon={<Brain size={17} />} loading={busy === "prepare"} onClick={() => void run("prepare", async () => {
-          await sendToActiveTab("resetAI");
           await prepareLocalAi(settings);
         })}>Prepare on-device analysis</Button>
       </details>

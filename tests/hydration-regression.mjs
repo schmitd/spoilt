@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "@playwright/test";
+import { openMockNativeEngine } from "./helpers/mock-native-engine.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const extensionPath = resolve(process.env.SPOILT_EXTENSION_PATH || resolve(root, ".output/chrome-mv3"));
@@ -21,7 +22,7 @@ const server = createServer((request, response) => {
 await new Promise(resolveReady => server.listen(0, "127.0.0.1", resolveReady));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const context = await chromium.launchPersistentContext("", {
-  channel: "chromium", headless: true,
+  channel: "chromium", headless: true, chromiumSandbox: true,
   args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
 });
 try {
@@ -57,30 +58,12 @@ try {
     };
     requestAnimationFrame(sample);
   });
-  const cdp = await context.newCDPSession(page);
-  let isolated;
-  cdp.on("Runtime.executionContextCreated", ({ context: world }) => {
-    if (world.name === "Spoilt" && world.origin === `chrome-extension://${extensionId}`) isolated = world.id;
-  });
-  await cdp.send("Runtime.enable");
+  let engine;
+  const closeModel = async () => { if (engine && !engine.isClosed()) await engine.close(); };
   const installModel = async (delay = 0) => {
-    await until(() => isolated, "content script world");
-    const result = await cdp.send("Runtime.evaluate", { contextId: isolated, expression: `
-      globalThis.__modelCalls = 0;
-      globalThis.__modelInputs = [];
-      Object.defineProperty(globalThis, "LanguageModel", { configurable: true, value: {
-        availability: async () => "available",
-        create: async () => ({ destroy() {}, prompt: async input => {
-          globalThis.__modelCalls++;
-          const text = String(input);
-          const items = JSON.parse(text.slice(text.lastIndexOf("Snippets:\\n") + 10));
-          globalThis.__modelInputs.push(items.map(item => item.text));
-          await new Promise(resolve => setTimeout(resolve, ${delay}));
-          return JSON.stringify({ decisions: items.map(item => ({ i: item.i,
-            block: item.text.startsWith(${JSON.stringify(spoiler)}), rule: "Story" })) });
-        } })
-      } }); undefined;`, returnByValue: true });
-    assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
+    await closeModel();
+    engine = await openMockNativeEngine(context, extensionId, { delay, spoiler });
+    await page.bringToFront();
   };
   const frames = async (label, predicate, expectExposure = false) => {
     const samples = await page.evaluate(() => window.__frames);
@@ -89,7 +72,7 @@ try {
     const exposed = selected.filter(frame => frame.exposed);
     samplesByCase[label] = selected;
     reports.push({ label, frames: selected.length, exposedFrames: exposed.length });
-    await writeFile(resolve(artifacts, "frames.json"), JSON.stringify({ browserVersion: context.browser()?.version(), model: "isolated-world mock", reports, samplesByCase }, null, 2));
+    await writeFile(resolve(artifacts, "frames.json"), JSON.stringify({ browserVersion: context.browser()?.version(), model: "extension-document mock via production internal messaging", reports, samplesByCase }, null, 2));
     assert(expectExposure ? exposed.length > 0 : exposed.length === 0,
       `${label}: ${exposed.length}/${selected.length} exposed frames`);
   };
@@ -100,6 +83,8 @@ try {
   await page.locator("#target").hover();
   await until(() => worker.evaluate(async () => Object.values(await chrome.storage.session.get(null))
     .some(value => value?.matches?.some(item => item.text === "The captain quietly survives the battle"))), "prefetched semantic result");
+  assert((await engine.evaluate(() => globalThis.__modelCalls)) > 0);
+  await closeModel();
   await page.locator("#target").click();
   await page.waitForSelector("h1 .spoilt-redacted-text");
   await page.waitForTimeout(120);
@@ -124,7 +109,6 @@ try {
   // Without link prefetch, reuse decisions made on the live page immediately
   // while the serialized model is busy on other candidates.
   await settings({ prefetchLinks: false, useLocalAI: false });
-  isolated = undefined;
   await page.goto(`${origin}/live`);
   await installModel(900);
   await settings({ useLocalAI: true });
@@ -134,11 +118,7 @@ try {
     pending.textContent = "Waiting on unrelated semantic work";
     document.querySelector("main").append(pending);
   });
-  await until(async () => {
-    const result = await cdp.send("Runtime.evaluate", { contextId: isolated,
-      expression: 'globalThis.__modelInputs.some(items => items.includes("Waiting on unrelated semantic work"))', returnByValue: true });
-    return result.result.value;
-  }, "unrelated slow model work");
+  await until(() => engine.evaluate(() => globalThis.__modelInputs.some(items => items.includes("Waiting on unrelated semantic work"))), "unrelated slow model work");
   await page.evaluate(text => {
     window.__frames = [];
     document.querySelector("h1").textContent = text;
@@ -152,6 +132,7 @@ try {
   await frames("live decision hydration", frame => frame.text === spoiler);
 
   await page.waitForTimeout(200);
+  await closeModel();
   await page.reload();
   await page.waitForTimeout(300);
   await frames("live decision reload", frame => frame.text === spoiler);
@@ -173,38 +154,29 @@ try {
   await installModel(900);
   await settings({ useLocalAI: true });
   await page.waitForTimeout(1200);
-  await cdp.send("Runtime.evaluate", { contextId: isolated, expression: "globalThis.__modelInputs = []; undefined;" });
+  await engine.evaluate(() => { globalThis.__modelInputs = []; });
   await page.evaluate(text => {
     const heading = document.createElement("h2");
     heading.id = "stale"; heading.textContent = text;
     document.querySelector("main").append(heading);
   }, spoiler);
-  await until(async () => {
-    const result = await cdp.send("Runtime.evaluate", { contextId: isolated,
-      expression: `globalThis.__modelInputs.some(items => items.includes(${JSON.stringify(spoiler)}))`, returnByValue: true });
-    return result.result.value;
-  }, "slow AI request to start before text mutation");
+  await until(() => engine.evaluate(text => globalThis.__modelInputs.some(items => items.includes(text)), spoiler), "slow AI request to start before text mutation");
   await page.evaluate(() => { document.querySelector("#stale").firstChild.data = "Safe updated headline"; });
   await page.waitForTimeout(1200);
   assert.equal(await page.locator("#stale .spoilt-redacted-text").count(), 0, "stale AI masked changed text");
 
   // Navigation while an AI prompt is in flight invalidates its callback too.
-  await cdp.send("Runtime.evaluate", { contextId: isolated, expression: "globalThis.__modelInputs = []; undefined;" });
+  await engine.evaluate(() => { globalThis.__modelInputs = []; });
   const routeSpoiler = `${spoiler} after dawn`;
   await page.evaluate(text => { document.querySelector("#stale").textContent = text; }, routeSpoiler);
-  await until(async () => {
-    const result = await cdp.send("Runtime.evaluate", { contextId: isolated,
-      expression: `globalThis.__modelInputs.some(items => items.includes(${JSON.stringify(routeSpoiler)}))`, returnByValue: true });
-    return result.result.value;
-  }, "slow AI request before route change");
+  await until(() => engine.evaluate(text => globalThis.__modelInputs.some(items => items.includes(text)), routeSpoiler), "slow AI request before route change");
   await page.evaluate(text => {
     history.pushState({}, "", "/new-route");
     document.querySelector("#stale").outerHTML = `<h1 data-probe>${text}</h1>`;
     window.__frames = [];
   }, routeSpoiler);
-  // Disable the destination's model without altering settings or cache identity.
-  await cdp.send("Runtime.evaluate", { contextId: isolated,
-    expression: "Object.defineProperty(globalThis, 'LanguageModel', { configurable: true, value: undefined }); undefined;" });
+  // Close the native host without altering settings or cache identity.
+  await closeModel();
   await page.waitForTimeout(1300);
   await frames("in-flight AI route invalidation", frame => frame.text === routeSpoiler, true);
 
@@ -224,11 +196,7 @@ try {
     paragraph.textContent = `${text} ${"ordinary words ".repeat(350)}`;
     document.querySelector("main").append(paragraph);
   }, spoiler);
-  await until(async () => {
-    const result = await cdp.send("Runtime.evaluate", { contextId: isolated,
-      expression: `globalThis.__modelInputs.some(items => items.some(text => text.startsWith(${JSON.stringify(`${spoiler} ordinary words`)})))`, returnByValue: true });
-    return result.result.value;
-  }, "positive model request for the long snapshot");
+  await until(() => engine.evaluate(prefix => globalThis.__modelInputs.some(items => items.some(text => text.startsWith(prefix))), `${spoiler} ordinary words`), "positive model request for the long snapshot");
   await page.waitForSelector("#long-ai-match .spoilt-redacted-text", { timeout: 3000 });
   assert((await page.locator("#long-ai-match .spoilt-redacted-text").textContent()).length > 4000);
   await settings({ maxTextNodesPerScan: 50 });
@@ -238,8 +206,7 @@ try {
     document.querySelector("main").append(seed);
   }, spoiler);
   await page.waitForSelector("#cursor-seed .spoilt-redacted-text", { timeout: 3000 });
-  await cdp.send("Runtime.evaluate", { contextId: isolated,
-    expression: "Object.defineProperty(globalThis, 'LanguageModel', { configurable: true, value: undefined }); undefined;" });
+  await closeModel();
   await page.evaluate(text => {
     const section = document.createElement("section");
     section.innerHTML = Array.from({ length: 80 }, (_, i) => `<p id="queued-cursor-${i}">Ordinary safe prose ${i}</p>`).join("")
@@ -250,7 +217,6 @@ try {
   await page.waitForSelector("#detached-cursor-tail .spoilt-redacted-text", { timeout: 3000 });
   assert.equal(await page.locator("#queued-cursor-25").count(), 0);
   await page.screenshot({ path: resolve(artifacts, "hydration.png") });
-  await cdp.detach();
   console.log(JSON.stringify(reports, null, 2));
 } finally {
   await context.close();
