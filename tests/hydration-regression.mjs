@@ -231,6 +231,24 @@ try {
   }, "positive model request for the long snapshot");
   await page.waitForSelector("#long-ai-match .spoilt-redacted-text", { timeout: 3000 });
   assert((await page.locator("#long-ai-match .spoilt-redacted-text").textContent()).length > 4000);
+  await settings({ maxTextNodesPerScan: 50 });
+  await page.waitForTimeout(200);
+  await page.evaluate(text => {
+    const seed = document.createElement("p"); seed.id = "cursor-seed"; seed.textContent = text;
+    document.querySelector("main").append(seed);
+  }, spoiler);
+  await page.waitForSelector("#cursor-seed .spoilt-redacted-text", { timeout: 3000 });
+  await cdp.send("Runtime.evaluate", { contextId: isolated,
+    expression: "Object.defineProperty(globalThis, 'LanguageModel', { configurable: true, value: undefined }); undefined;" });
+  await page.evaluate(text => {
+    const section = document.createElement("section");
+    section.innerHTML = Array.from({ length: 80 }, (_, i) => `<p id="queued-cursor-${i}">Ordinary safe prose ${i}</p>`).join("")
+      + `<h2 id="detached-cursor-tail">${text}</h2>`;
+    document.querySelector("main").append(section);
+    queueMicrotask(() => section.querySelector("#queued-cursor-25").remove());
+  }, spoiler);
+  await page.waitForSelector("#detached-cursor-tail .spoilt-redacted-text", { timeout: 3000 });
+  assert.equal(await page.locator("#queued-cursor-25").count(), 0);
   await page.screenshot({ path: resolve(artifacts, "hydration.png") });
   await cdp.detach();
   console.log(JSON.stringify(reports, null, 2));

@@ -84,6 +84,12 @@ large revealed subtrees finish in bounded continuation chunks while new small
 changes retain priority; and failed, `no-store`, or oversized speculative images
 consume the same three-attempt budget as successful downloads.
 
+Continuation regressions remove a queued sibling, or the visited node together
+with adjacent queued siblings, between traversal chunks. A cached match later in
+the same connected subtree must still be reached. The browser variant seeds the
+decision cache and then disables the model so another AI scan cannot hide a lost
+continuation position.
+
 ## Full Gate
 
 ```bash
