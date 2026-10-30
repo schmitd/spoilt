@@ -5,14 +5,15 @@ import { NATIVE_RETRY_KEY } from "../../core/native-ai-protocol";
 import type { Settings } from "../../core/types";
 
 const { syncGet, syncSet, localGet, localSet, addChangeListener, removeChangeListener, getCurrentWindow, updateWindow, disconnect, addPortMessageListener,
-  getCurrentTab, addTabAttachmentListener, removeTabAttachmentListener } = vi.hoisted(() => ({
+  getCurrentTab, addTabAttachmentListener, removeTabAttachmentListener, postPortMessage } = vi.hoisted(() => ({
   syncGet: vi.fn(), syncSet: vi.fn(), localGet: vi.fn(), localSet: vi.fn(),
   addChangeListener: vi.fn(), removeChangeListener: vi.fn(),
   getCurrentWindow: vi.fn(), updateWindow: vi.fn(), disconnect: vi.fn(), addPortMessageListener: vi.fn(),
   getCurrentTab: vi.fn(), addTabAttachmentListener: vi.fn(), removeTabAttachmentListener: vi.fn(),
+  postPortMessage: vi.fn(),
 }));
 vi.mock("wxt/browser", () => ({ browser: {
-  runtime: { connect: () => ({ onMessage: { addListener: addPortMessageListener }, onDisconnect: { addListener: vi.fn() }, disconnect }) },
+  runtime: { connect: () => ({ onMessage: { addListener: addPortMessageListener }, onDisconnect: { addListener: vi.fn() }, disconnect, postMessage: postPortMessage }) },
   storage: { sync: { get: syncGet, set: syncSet }, local: { get: localGet, set: localSet },
     onChanged: { addListener: addChangeListener, removeListener: removeChangeListener } },
   windows: { getCurrent: getCurrentWindow, update: updateWindow },
@@ -50,6 +51,7 @@ beforeEach(() => {
 
 afterEach(() => {
   window.dispatchEvent(new Event("pagehide"));
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   document.body.innerHTML = "";
@@ -67,6 +69,23 @@ function changeSettings(patch: Partial<Settings>) {
 }
 
 describe("analysis preparation eligibility", () => {
+  it("returns busy for queue wait without spending a queued request's execution budget", async () => {
+    await start();
+    session.prompt.mockImplementation(() => new Promise<string>(() => undefined));
+    const receive = addPortMessageListener.mock.calls[0]![0] as (message: unknown) => void;
+    const first = crypto.randomUUID(); const second = crypto.randomUUID();
+    receive({ type: "classify", requestId: first, priority: "foreground", input: { kind: "text", texts: ["Synthetic private fixture one"] } });
+    await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce());
+    vi.useFakeTimers();
+    receive({ type: "classify", requestId: second, priority: "background", input: { kind: "text", texts: ["Synthetic private fixture two"] } });
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(postPortMessage).toHaveBeenCalledWith({ type: "result", requestId: second, response: { ok: false, reason: "busy" } });
+    expect(session.prompt).toHaveBeenCalledOnce();
+    expect(document.querySelector("#performance-data")!.textContent).not.toContain("Synthetic private fixture");
+    receive({ type: "cancel", requestId: first });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(postPortMessage).toHaveBeenCalledWith({ type: "result", requestId: first, response: { ok: false, reason: "cancelled" } });
+  });
   it.each(["useLocalAI", "useVision"] as const)("enables the existing page's buttons after %s is enabled", async (flag) => {
     settings = { ...settings, [flag]: false };
     await start();

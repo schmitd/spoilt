@@ -51,6 +51,15 @@ See [docs/TESTING.md](docs/TESTING.md) for the complete release gates.
 See [docs/RELEASE.md](docs/RELEASE.md) for the store and manual review checklist.
 See [docs/NATIVE-AI.md](docs/NATIVE-AI.md) for explicit model preparation, hardware requirements, and the analysis window lifecycle.
 
+Native analysis prioritizes the viewport while continuing below the fold, shares
+duplicate snippets, and briefly reuses exact document-local decisions. Independent
+clones of a fixed-context session avoid repeating setup without carrying page
+history between requests. Image analysis remains available alongside text checks;
+speculative link work yields to foreground protection. The analysis window's
+**Local performance details** exposes content-free timings for diagnosis. These
+changes reduce orchestration work; native GPU speed still depends on Chrome's
+selected model and backend.
+
 ## Package
 
 ```bash

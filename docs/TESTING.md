@@ -92,8 +92,15 @@ continuation position.
 
 ## Full Gate
 
+The performance integration gate (`npm run test:performance`) loads the production
+extension in a temporary sandboxed Chromium profile with a deterministic cloned
+model. It verifies session reuse, exact decision reuse, positive/negative controls
+and configuration invalidation, and writes numeric evidence under
+`.artifacts/performance/`. It does not establish native model accuracy or GPU speed.
+
 ```bash
 npm test
 ```
 
-This runs unit/component tests, the production build, and the real extension smoke test.
+This runs unit/component and manifest tests, the production build, the real extension
+smoke test, frame/hydration regressions, and the performance integration gate.

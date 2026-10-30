@@ -78,6 +78,30 @@ describe("NativeAiBroker", () => {
     vi.useRealTimers();
   });
 
+  it("clamps foreground claims to the authenticated active tab and validates hints", async () => {
+    const port = makePort(); broker.connect(port.native);
+    const background = broker.handleMessage({ ...classify(), priority: "foreground" }, sender());
+    expect(port.postMessage.mock.calls.at(-1)?.[0].priority).toBe("background");
+    port.onMessage.emit({ type: "result", requestId: latestId(port), response: RESULT }); await background;
+    const activeSender = sender(); activeSender.tab!.active = true;
+    const foreground = broker.handleMessage({ ...classify(), priority: "foreground" }, activeSender);
+    expect(port.postMessage.mock.calls.at(-1)?.[0].priority).toBe("foreground");
+    port.onMessage.emit({ type: "result", requestId: latestId(port), response: RESULT }); await foreground;
+    expect(broker.handleMessage({ ...classify(), priority: "private prompt" }, activeSender)).toEqual(failure("invalid"));
+  });
+
+  it("cancels speculative work for live foreground work and refuses speculation during live work", async () => {
+    const port = makePort(); broker.connect(port.native);
+    const prepared = broker.handleMessage({ ...classify(), priority: "speculative" }, sender());
+    const speculativeId = latestId(port);
+    const activeSender = sender(); activeSender.tab!.active = true;
+    const live = broker.handleMessage({ ...classify(), priority: "foreground" }, activeSender);
+    await expect(prepared).resolves.toEqual(failure("cancelled"));
+    expect(port.postMessage).toHaveBeenCalledWith({ type: "cancel", requestId: speculativeId });
+    expect(broker.handleMessage({ ...classify(), priority: "speculative" }, sender(2))).toEqual(failure("busy"));
+    port.onMessage.emit({ type: "result", requestId: latestId(port), response: RESULT }); await live;
+  });
+
   it("returns honest unavailability without forwarding or storing page content", () => {
     expect(broker.handleMessage(classify(), sender())).toEqual(failure("unavailable"));
     expect(reportUnavailable).toHaveBeenCalledOnce();

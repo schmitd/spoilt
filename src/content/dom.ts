@@ -19,62 +19,202 @@ export interface ImageCandidate {
 export class CandidateCollector {
   #processedText = new WeakMap<Text, string>();
   #processedImages = new WeakMap<Element, string>();
+  #textTraversal: Generator<Node> | null = null;
+  #textRoot: Node | null = null;
+  #textSignature = "";
+  #deferredText = new Map<Text, TextCandidate>();
+  #textComplete = false;
+  #freshRoots = new Set<Node>();
+  #freshTraversals: Generator<Node>[] = [];
+  #freshText = new Map<Text, TextCandidate>();
+  #restartTextAfterPass = false;
+  #imageElements: Element[] | null = null;
+  #imageIndex = 0;
+  #imageSignature = "";
+  #deferredImages = new Map<Element, ImageCandidate>();
+  #imagesComplete = false;
 
-  collectText(settings: Settings, signature: string): TextCandidate[] {
-    const candidates: TextCandidate[] = [];
+  get hasPendingText(): boolean { return Boolean(!this.#textComplete || this.#restartTextAfterPass || this.#textTraversal || this.#deferredText.size || this.#freshRoots.size || this.#freshTraversals.length || this.#freshText.size); }
+  get hasPendingImages(): boolean { return Boolean(!this.#imagesComplete || this.#imageElements || this.#deferredImages.size); }
+
+  enqueueRoots(roots: Iterable<Node>): void {
+    for (const root of roots) {
+      if (!root.isConnected || isSpoiltNode(root)) continue;
+      // Coalesce mutations in the same newly inserted subtree before walking it.
+      if ([...this.#freshRoots].some((existing) => existing.contains(root))) continue;
+      for (const existing of this.#freshRoots) if (root.contains(existing)) this.#freshRoots.delete(existing);
+      if (this.#freshRoots.size < 64) this.#freshRoots.add(root);
+      else this.#deferFullTraversal();
+    }
+    // A fresh image snapshot is cheap and also sees inserted/replaced elements
+    // that precede an older snapshot's cursor. Already processed images are skipped.
+    this.#imageElements = null; this.#imageIndex = 0; this.#imagesComplete = false;
+  }
+
+  collectText(settings: Settings, signature: string, limit = settings.maxTextNodesPerScan): TextCandidate[] {
     const root = document.body || document.documentElement;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode: (node) => {
-        if (candidates.length >= settings.maxTextNodesPerScan) return NodeFilter.FILTER_REJECT;
-        const textNode = node as Text;
-        const text = normalizeWhitespace(textNode.nodeValue);
-        if (!text || text.length < 4 || this.#processedText.get(textNode) === `${signature}:${text}`) return NodeFilter.FILTER_REJECT;
-        const parent = textNode.parentElement;
-        if (!parent || shouldSkipElement(parent) || !isVisible(parent)) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    });
-    let node = walker.nextNode() as Text | null;
-    while (node && candidates.length < settings.maxTextNodesPerScan) {
-      const text = normalizeWhitespace(node.nodeValue);
-      this.#processedText.set(node, `${signature}:${text}`);
-      candidates.push({ node, text });
-      node = walker.nextNode() as Text | null;
+    if (this.#textRoot !== root || this.#textSignature !== signature) {
+      this.#textTraversal?.return(undefined);
+      this.#textTraversal = null;
+      this.#deferredText.clear();
+      this.#textComplete = false;
+      this.#clearFreshText();
+      this.#textRoot = root;
+      this.#textSignature = signature;
+    }
+    for (const pool of [this.#deferredText, this.#freshText]) for (const [node, candidate] of pool) {
+      if (!this.#eligibleText(node, candidate.text, signature)) pool.delete(node);
+    }
+    for (const freshRoot of this.#freshRoots) {
+      this.#freshTraversals.unshift(walkDocumentNodes(freshRoot));
+      if (this.#freshTraversals.length > 64) { this.#freshTraversals.pop()!.return(undefined); this.#deferFullTraversal(); }
+    }
+    this.#freshRoots.clear();
+    let freshVisits = 1000;
+    while (this.#freshTraversals.length && freshVisits-- > 0 && this.#freshText.size < 72) {
+      const step = this.#freshTraversals[0]!.next();
+      if (step.done) { this.#freshTraversals.shift(); continue; }
+      if (step.value.nodeType !== Node.TEXT_NODE) continue;
+      const node = step.value as Text; const text = normalizeWhitespace(node.data);
+      if (this.#eligibleText(node, text, signature)) this.#freshText.set(node, { node, text });
+    }
+    if (!this.#textComplete) this.#textTraversal ??= walkDocumentNodes(root);
+    // Look beyond the returned batch, but bound both traversal and retained work.
+    // The cursor resumes later so a large page cannot lose its deferred tail.
+    const pendingLimit = Math.max(72, settings.maxTextNodesPerScan * 4);
+    let visits = Math.max(4000, settings.maxTextNodesPerScan * 4);
+    while (this.#textTraversal && visits-- > 0 && this.#deferredText.size < pendingLimit) {
+      const step = this.#textTraversal.next();
+      if (step.done) {
+        this.#textTraversal = null; this.#textComplete = !this.#restartTextAfterPass; this.#restartTextAfterPass = false; break;
+      }
+      if (step.value.nodeType !== Node.TEXT_NODE) continue;
+      const node = step.value as Text;
+      const text = normalizeWhitespace(node.data);
+      if (this.#eligibleText(node, text, signature)) this.#deferredText.set(node, { node, text });
+    }
+    const pool = new Map([...this.#deferredText, ...this.#freshText]);
+    const candidates = viewportFirst([...pool.values()], (candidate) => candidate.node.parentElement,
+      Math.max(1, Math.min(limit, settings.maxTextNodesPerScan)));
+    for (const candidate of candidates) {
+      this.#deferredText.delete(candidate.node);
+      this.#freshText.delete(candidate.node);
+      this.#processedText.set(candidate.node, `${signature}:${candidate.text}`);
     }
     return candidates;
   }
 
   collectImages(settings: Settings, signature: string): ImageCandidate[] {
-    const candidates: ImageCandidate[] = [];
-    const elements = document.querySelectorAll("img, picture, svg[role='img'], video[poster], canvas");
-    for (const element of elements) {
-      if (candidates.length >= settings.maxImagesPerScan) break;
+    if (this.#imageSignature !== signature) {
+      this.#imageElements = null; this.#imageIndex = 0; this.#deferredImages.clear(); this.#imageSignature = signature; this.#imagesComplete = false;
+    }
+    for (const [element, candidate] of this.#deferredImages) {
+      if (!element.isConnected || imageMetadata(element) !== candidate.metadataText
+        || this.#processedImages.get(element) === `${signature}:${candidate.metadataText}`) this.#deferredImages.delete(element);
+    }
+    if (!this.#imagesComplete) this.#imageElements ??= [...document.querySelectorAll("img, picture, svg[role='img'], video[poster], canvas")];
+    const pendingLimit = Math.max(48, settings.maxImagesPerScan * 4);
+    let visits = pendingLimit;
+    while (this.#imageElements && this.#imageIndex < this.#imageElements.length && visits-- > 0 && this.#deferredImages.size < pendingLimit) {
+      const element = this.#imageElements[this.#imageIndex++]!;
       const metadataText = imageMetadata(element);
-      if (this.#processedImages.get(element) === `${signature}:${metadataText}` || shouldSkipElement(element) || !isVisible(element)) continue;
+      if (!element.isConnected || this.#processedImages.get(element) === `${signature}:${metadataText}` || shouldSkipElement(element) || !isVisible(element)) continue;
       const rect = element.getBoundingClientRect();
       if (rect.width < 24 || rect.height < 24) continue;
-      this.#processedImages.set(element, `${signature}:${metadataText}`);
-      candidates.push({ element, metadataText });
+      this.#deferredImages.set(element, { element, metadataText });
+    }
+    if (this.#imageElements && this.#imageIndex >= this.#imageElements.length) { this.#imageElements = null; this.#imageIndex = 0; this.#imagesComplete = true; }
+    const candidates = viewportFirst([...this.#deferredImages.values()], (candidate) => candidate.element, settings.maxImagesPerScan);
+    for (const candidate of candidates) {
+      this.#deferredImages.delete(candidate.element);
+      this.#processedImages.set(candidate.element, `${signature}:${candidate.metadataText}`);
     }
     return candidates;
+  }
+
+  #eligibleText(node: Text, text: string, signature: string): boolean {
+    const parent = node.parentElement;
+    return Boolean(parent && node.isConnected && text.length >= 4 && normalizeWhitespace(node.data) === text
+      && this.#processedText.get(node) !== `${signature}:${text}` && !shouldSkipElement(parent) && isVisible(parent));
   }
 
   retryText(candidates: TextCandidate[], signature: string): void {
     for (const { node, text } of candidates) {
       if (this.#processedText.get(node) === `${signature}:${text}`) this.#processedText.delete(node);
     }
+    this.#deferredText = new Map([...candidates.map((candidate) => [candidate.node, candidate] as const), ...this.#deferredText]);
   }
 
   retryImages(candidates: ImageCandidate[], signature: string): void {
     for (const { element, metadataText } of candidates) {
       if (this.#processedImages.get(element) === `${signature}:${metadataText}`) this.#processedImages.delete(element);
     }
+    this.#deferredImages = new Map([...candidates.map((candidate) => [candidate.element, candidate] as const), ...this.#deferredImages]);
   }
 
   reset(): void {
     this.#processedText = new WeakMap();
     this.#processedImages = new WeakMap();
+    this.#textTraversal?.return(undefined); this.#textTraversal = null; this.#textRoot = null;
+    this.#deferredText.clear(); this.#deferredImages.clear(); this.#imageElements = null; this.#imageIndex = 0;
+    this.#textComplete = false; this.#imagesComplete = false; this.#clearFreshText();
   }
+
+  #clearFreshText(): void {
+    for (const traversal of this.#freshTraversals) traversal.return(undefined);
+    this.#freshTraversals = []; this.#freshRoots.clear(); this.#freshText.clear(); this.#restartTextAfterPass = false;
+  }
+
+  #deferFullTraversal(): void {
+    if (this.#textComplete) { this.#textComplete = false; this.#restartTextAfterPass = false; }
+    else this.#restartTextAfterPass = true;
+  }
+}
+
+export function inViewport(element: Element | null): boolean {
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0
+    && rect.top < window.innerHeight && rect.left < window.innerWidth;
+}
+
+function viewportFirst<T>(candidates: T[], element: (candidate: T) => Element | null, limit: number): T[] {
+  const selected = new Set<T>();
+  // Reserve a quarter of every full collection for the oldest deferred work.
+  const foregroundSlots = Math.max(1, limit - Math.floor(limit / 4));
+  for (const candidate of candidates) {
+    if (selected.size >= foregroundSlots) break;
+    if (inViewport(element(candidate))) selected.add(candidate);
+  }
+  for (const candidate of candidates) {
+    if (selected.size >= limit) break;
+    selected.add(candidate);
+  }
+  return [...selected];
+}
+
+function* walkDocumentNodes(root: Node): Generator<Node> {
+  const stack: Array<{ parent: Node; cursor: Range }> = [];
+  let next: Node | null = root;
+  try {
+    while (next || stack.length) {
+      if (next) {
+        const node: Node = next; next = null;
+        if (!node.isConnected || (node instanceof Element && shouldSkipElement(node))) continue;
+        yield node;
+        if (node.isConnected && node.firstChild && !isSpoiltNode(node)) {
+          const cursor = document.createRange(); cursor.setStart(node, 0); cursor.collapse(true);
+          stack.push({ parent: node, cursor });
+        }
+      } else {
+        const frame = stack[stack.length - 1]!;
+        if (!frame.parent.isConnected || frame.cursor.startContainer !== frame.parent) { frame.cursor.detach(); stack.pop(); continue; }
+        next = frame.parent.childNodes.item(frame.cursor.startOffset);
+        if (!next) { frame.cursor.detach(); stack.pop(); continue; }
+        frame.cursor.setStart(frame.parent, frame.cursor.startOffset + 1); frame.cursor.collapse(true);
+      }
+    }
+  } finally { for (const frame of stack) frame.cursor.detach(); }
 }
 
 export class Redactor {

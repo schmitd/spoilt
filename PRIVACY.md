@@ -14,7 +14,9 @@ Spoilt reads visible page text and image metadata so it can apply the boundaries
 
 For image analysis, Spoilt may fetch the selected image into the extension process. The image is passed only to Chrome's on-device model and is not uploaded by Spoilt.
 
-Native analysis runs in Spoilt's compact extension window, which must remain open while browsing and may be minimized after successful setup if you choose. Closing it stops future native checks; keyword and description matching remain active. Ordinary scans use only models Chrome reports as already available. Model preparation requires an explicit button click after a download disclosure; Chrome may download several gigabytes. Classification inputs stay in memory during bounded requests and sessions are destroyed after each operation. An operational retry nonce contains no page content or URLs. Existing positive-decision retention is described below.
+Native analysis runs in Spoilt's compact extension window, which must remain open while browsing and may be minimized after successful setup if you choose. Closing it stops future native checks; keyword and description matching remain active. Ordinary scans use only models Chrome reports as already available. Model preparation requires an explicit button click after a download disclosure; Chrome may download several gigabytes. Classification inputs stay in memory during bounded requests. Each operation uses a disposable session or independent clone, destroyed after completion or cancellation. A pristine baseline for text and another for images may retain fixed instructions, boundaries and recent public context until 60 seconds of idle time, configuration changes or window closure; baselines never receive browsed page inputs or replies. An operational retry nonce contains no page content or URLs. Existing positive-decision retention is described below.
+
+The analysis window's optional local performance details retain at most 128 numeric timing samples and fixed labels in memory. These include request counts, text lengths, output lengths and session/inference durations. They contain no page text, images, URLs, boundary values or model replies and are not uploaded or written to storage. Closing the window clears them.
 
 ## Optional Recent Knowledge
 
@@ -64,3 +66,10 @@ browser exit and tab closure, and ignored after settings or recent knowledge
 change. A route change discards the active in-memory decisions. This happens
 independently of the optional link-prefetch setting, requires no new permissions,
 and sends no content to a server. Image bytes are not retained in this cache.
+
+A document-local inference cache additionally holds at most 700 exact text snippets
+and their positive or safe decisions for up to 60 seconds to avoid rechecking
+duplicate or replaced nodes. This cache stays in content-script memory, is not
+written to Chrome storage, and is discarded on route, settings or recent-knowledge
+changes. It is not shared between pages or tabs. Long text whose full contents do
+not fit in a model snippet is not cached as a complete decision.
