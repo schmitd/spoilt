@@ -20,7 +20,12 @@ The analysis window's optional local performance details retain at most 128 nume
 
 ## Optional Recent Knowledge
 
-When **Keep recent knowledge up to date** is enabled, Spoilt sends search queries derived from enabled boundary names, descriptions, and keywords to Google News RSS. It stores a limited set of returned headlines, links, source names, dates, and image references locally.
+When **Keep recent knowledge up to date** is enabled, Spoilt sends search queries derived from enabled boundary descriptions and explicit keywords to Google News RSS. Display names are excluded. It stores a limited set of returned headlines, links, source names, dates, image references and criterion-provenance keys locally. Boundaries without criteria make no news request.
+
+Stored knowledge is used only when its provenance matches the current criteria.
+Older or stale records remain stored but do not influence matching; the next
+successful normal refresh rebuilds affected records from the configured criteria.
+Display labels and derived display reasons are excluded from AI context.
 
 This feature can be disabled or its stored data cleared from the settings page.
 

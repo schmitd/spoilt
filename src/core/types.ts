@@ -101,6 +101,7 @@ export interface MemoryImageExample {
 }
 
 export interface MemoryRuleRun {
+  criteriaKey?: string;
   at: string;
   reason: string;
   query: string;

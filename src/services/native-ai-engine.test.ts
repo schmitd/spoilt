@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../core/settings";
 import { normalizeMemory } from "../core/memory";
+import { ruleCriteriaKey } from "../core/rule-criteria";
+import type { BlockingRule } from "../core/types";
 import sharp from "sharp";
 import { NativeAiEngine, READINESS_IMAGE_DATA_URL } from "./native-ai-engine";
 
@@ -18,7 +20,7 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const input = { kind: "text" as const, texts: ["A scene from the next episode"] };
-function mockModel(availability = "available", output = '{"decisions":[{"i":0,"block":true,"rule":"Story"}]}') {
+function mockModel(availability = "available", output = '{"decisions":[{"i":0,"block":true,"rule":"boundary-1"}]}') {
   const session = { prompt: vi.fn(async (_input: unknown, _options?: unknown) => output), destroy: vi.fn() };
   const model = { availability: vi.fn(async () => availability), create: vi.fn(async () => session) };
   vi.stubGlobal("LanguageModel", model);
@@ -43,7 +45,9 @@ describe("native Window inference engine", () => {
     const { model, session } = mockModel();
     const response = await new NativeAiEngine().classify(input, new AbortController().signal);
     expect(response).toMatchObject({ ok: true, decisions: [{ i: 0, block: true }] });
-    expect(JSON.stringify(model.create.mock.calls[0])).toContain("Plot spoilers");
+    expect(JSON.stringify(model.create.mock.calls[0])).toContain("boundary-1");
+    expect(JSON.stringify(model.create.mock.calls[0])).toContain(DEFAULT_SETTINGS.rules[0]!.description);
+    expect(JSON.stringify(model.create.mock.calls[0])).not.toContain("Plot spoilers");
     expect(session.prompt.mock.calls[0]?.[0]).not.toContain("Plot spoilers");
     expect(model.create).toHaveBeenCalledOnce();
     expect(session.destroy).toHaveBeenCalledOnce();
@@ -141,6 +145,16 @@ function cloneableModel(output = '{"decisions":[]}') {
   return { model, baselines, clones, disposable };
 }
 
+function criterionMemory(rule: BlockingRule, title = "Actual lunar mission outcome") {
+  return normalizeMemory({
+    entries: [{ id: "public-entry", ruleId: rule.id, title, snippet: "An actual public event detail", url: "https://example.test/story",
+      source: "Synthetic public source", publishedAt: "", discoveredAt: "", terms: ["lunar", "mission"], reason: `Stored reason for ${rule.name}` }],
+    imageExamples: [{ id: "public-image", ruleId: rule.id, imageUrl: "https://example.test/image.png", sourceUrl: "https://example.test/story",
+      title: "Actual public image detail", label: rule.name, reason: `Stored image reason for ${rule.name}`, discoveredAt: "" }],
+    ruleRuns: { [rule.id]: { at: "", reason: "", query: "lunar mission", resultCount: 1, imageExampleCount: 1, criteriaKey: ruleCriteriaKey(rule) } },
+  });
+}
+
 describe("independent sessions from a pristine baseline", () => {
   it("creates one fixed-context baseline and destroys independent page clones", async () => {
     const { model, baselines, clones } = cloneableModel();
@@ -152,9 +166,10 @@ describe("independent sessions from a pristine baseline", () => {
     expect(baselines[0]!.prompt).not.toHaveBeenCalled();
     expect(baselines[0]!.destroy).not.toHaveBeenCalled();
     const fixed = JSON.stringify(model.create.mock.calls[0]);
-    expect(fixed).toContain("Plot spoilers");
+    expect(fixed).toContain("boundary-1");
+    expect(fixed).not.toContain("Plot spoilers");
     expect(model.create.mock.calls[0]![0]!.initialPrompts).toMatchObject([
-      { role: "system" }, { role: "user", content: expect.stringContaining("Plot spoilers") }, { role: "assistant" },
+      { role: "system" }, { role: "user", content: expect.stringContaining("boundary-1") }, { role: "assistant" },
     ]);
     expect((model.create.mock.calls[0]![0]!.initialPrompts[0] as { content: string }).content).not.toContain("Plot spoilers");
     expect(fixed).not.toContain(input.texts[0]);
@@ -171,7 +186,7 @@ describe("independent sessions from a pristine baseline", () => {
     const engine = new NativeAiEngine();
     await engine.classify(input, new AbortController().signal);
     if (changed === "settings") loadSettings.mockResolvedValue({ ...DEFAULT_SETTINGS, strictness: "strict" });
-    else loadMemory.mockResolvedValue({ ...normalizeMemory(), lastUpdatedAt: "2026-10-30T00:00:00Z" });
+    else loadMemory.mockResolvedValue(criterionMemory(DEFAULT_SETTINGS.rules[0]!));
     await engine.classify(input, new AbortController().signal);
     expect(model.create).toHaveBeenCalledTimes(2);
     expect(baselines[0]!.destroy).toHaveBeenCalledOnce();
@@ -392,14 +407,145 @@ describe("independent sessions from a pristine baseline", () => {
   });
 
   it("keeps every synthetic snippet and positive index in the sparse decision contract", async () => {
-    const { clones } = cloneableModel('{"decisions":[{"i":1,"block":true,"rule":"Plot spoilers","reason":"Ending revealed"}]}');
+    const { clones } = cloneableModel('{"decisions":[{"i":1,"block":true,"rule":"boundary-1","reason":"Ending revealed"}]}');
     const engine = new NativeAiEngine();
     const texts = ["A harmless weather report", "The captain survives the last battle", "A recipe for vegetable soup"];
-    expect(await engine.classify({ kind: "text", texts }, new AbortController().signal)).toEqual({ ok: true, decisions: [{ i: 1, block: true, rule: "Plot spoilers", reason: "Ending revealed" }] });
+    expect(await engine.classify({ kind: "text", texts }, new AbortController().signal)).toEqual({ ok: true, decisions: [{ i: 1, block: true, ruleId: DEFAULT_SETTINGS.rules[0]!.id, rule: "Plot spoilers", reason: "Ending revealed" }] });
     const prompt = clones[0]!.prompt.mock.calls[0]![0] as string;
     expect(prompt).toContain("Evaluate every snippet independently");
     expect(prompt).toContain('return {"decisions":[]}');
     expect(JSON.parse(prompt.split("Snippets:\n")[1]!)).toEqual(texts.map((text, i) => ({ i, text })));
+    engine.close();
+  });
+});
+
+describe("filter names are display metadata", () => {
+  it.each(["text", "image"] as const)("keeps %s model inputs and its baseline unchanged after a rename", async (kind) => {
+    const original = { ...DEFAULT_SETTINGS.rules[0]!, id: "local-private-rule-id", name: "Private display label A" };
+    let settings = { ...DEFAULT_SETTINGS, rules: [original] };
+    loadSettings.mockImplementation(async () => settings);
+    const output = kind === "text" ? '{"decisions":[{"i":0,"block":true,"rule":"boundary-1"}]}' : '{"block":true,"rule":"boundary-1"}';
+    const { model, baselines, clones } = cloneableModel(output);
+    const engine = new NativeAiEngine();
+    const request = kind === "text" ? input : { kind, metadata: "Independent image description", dataUrl: READINESS_IMAGE_DATA_URL };
+    const first = await engine.classify(request, new AbortController().signal);
+    expect(first).toMatchObject(kind === "text" ? { decisions: [{ ruleId: original.id, rule: original.name }] } : { decision: { ruleId: original.id, rule: original.name } });
+    settings = { ...settings, rules: [{ ...original, name: "Renamed display label B" }] };
+    const second = await engine.classify(request, new AbortController().signal);
+    expect(second).toMatchObject(kind === "text" ? { decisions: [{ ruleId: original.id, rule: "Renamed display label B" }] } : { decision: { ruleId: original.id, rule: "Renamed display label B" } });
+    expect(model.create).toHaveBeenCalledOnce();
+    expect(baselines[0]!.destroy).not.toHaveBeenCalled();
+    expect(JSON.stringify(clones[0]!.prompt.mock.calls[0]![0])).toBe(JSON.stringify(clones[1]!.prompt.mock.calls[0]![0]));
+    const fixed = JSON.stringify(model.create.mock.calls[0]![0]!.initialPrompts);
+    expect(fixed).not.toContain(original.name);
+    expect(fixed).not.toContain("Renamed display label B");
+    expect(fixed).not.toContain(original.id);
+    // A fresh engine with the renamed label constructs the identical prefix.
+    const fresh = new NativeAiEngine();
+    await fresh.classify(request, new AbortController().signal);
+    expect(JSON.stringify(model.create.mock.calls[1]![0]!.initialPrompts)).toBe(fixed);
+    engine.close(); fresh.close();
+  });
+
+  it("maps a decision to the latest label when it changes during inference", async () => {
+    const original = { ...DEFAULT_SETTINGS.rules[0]!, name: "Before native inference" };
+    let settings = { ...DEFAULT_SETTINGS, rules: [original] };
+    loadSettings.mockImplementation(async () => settings);
+    const { model, session } = mockModel();
+    session.prompt.mockImplementation(async () => {
+      settings = { ...settings, rules: [{ ...original, name: "After native inference" }] };
+      return '{"decisions":[{"i":0,"block":true,"rule":"boundary-1"}]}';
+    });
+    const engine = new NativeAiEngine();
+    expect(await engine.classify(input, new AbortController().signal)).toEqual({ ok: true, decisions: [{ i: 0, block: true, ruleId: original.id, rule: "After native inference" }] });
+    expect(JSON.stringify(model.create.mock.calls[0])).not.toContain(original.name);
+    expect(JSON.stringify(model.create.mock.calls[0])).not.toContain("After native inference");
+    engine.close();
+  });
+
+  it("cancels a decision when actual criteria change during inference", async () => {
+    let settings = DEFAULT_SETTINGS;
+    loadSettings.mockImplementation(async () => settings);
+    const { session } = mockModel();
+    session.prompt.mockImplementation(async () => {
+      settings = { ...DEFAULT_SETTINGS, rules: [{ ...DEFAULT_SETTINGS.rules[0]!, description: "Different protected subject" }] };
+      return '{"decisions":[{"i":0,"block":true,"rule":"boundary-1"}]}';
+    });
+    const engine = new NativeAiEngine();
+    expect(await engine.classify(input, new AbortController().signal)).toEqual({ ok: false, reason: "cancelled" });
+    engine.close();
+  });
+
+  it("maps aliases after filtering empty and disabled criteria", async () => {
+    const labelOnly = { id: "title-only-id", name: "Unused title", description: "", keywords: [], enabled: true };
+    const disabled = { ...DEFAULT_SETTINGS.rules[0]!, id: "disabled-id", name: "Disabled title", enabled: false };
+    const active = { ...DEFAULT_SETTINGS.rules[0]!, id: "actual-active-id", name: "Actual display label" };
+    loadSettings.mockResolvedValue({ ...DEFAULT_SETTINGS, rules: [labelOnly, disabled, active] });
+    const { model } = mockModel();
+    const engine = new NativeAiEngine();
+    expect(await engine.classify(input, new AbortController().signal)).toEqual({ ok: true, decisions: [{ i: 0, block: true, ruleId: active.id, rule: active.name }] });
+    const fixed = JSON.stringify(model.create.mock.calls[0]);
+    for (const rule of [labelOnly, disabled, active]) { expect(fixed).not.toContain(rule.name); expect(fixed).not.toContain(rule.id); }
+    expect(fixed).toContain("boundary-1");
+    expect(fixed).not.toContain("boundary-2");
+    engine.close();
+  });
+
+  it.each([undefined, "Unrecognized display name", "boundary-99"])("keeps a positive without trusting unrecognized attribution: %s", async (alias) => {
+    const raw = { i: 0, block: true, ruleId: "forged-rule-id", ...(alias === undefined ? {} : { rule: alias }), reason: "Semantic match" };
+    mockModel("available", JSON.stringify({ decisions: [raw] }));
+    const engine = new NativeAiEngine();
+    expect(await engine.classify(input, new AbortController().signal)).toEqual({ ok: true, decisions: [{ i: 0, block: true, reason: "Semantic match" }] });
+    engine.close();
+  });
+
+  it("returns safe text and images without probing or creating a model for title-only rules", async () => {
+    loadSettings.mockResolvedValue({ ...DEFAULT_SETTINGS, rules: [{ id: "empty-rule", name: "Dragon ending", description: "  ", keywords: ["  "], enabled: true }] });
+    const { model, session } = mockModel();
+    const engine = new NativeAiEngine();
+    expect(await engine.classify({ kind: "text", texts: ["Dragon ending"] }, new AbortController().signal)).toEqual({ ok: true, decisions: [] });
+    expect(await engine.classify({ kind: "image", metadata: "Dragon ending", dataUrl: READINESS_IMAGE_DATA_URL }, new AbortController().signal)).toEqual({ ok: true, decision: { block: false } });
+    expect(model.availability).not.toHaveBeenCalled();
+    expect(model.create).not.toHaveBeenCalled();
+    expect(session.prompt).not.toHaveBeenCalled();
+    expect(await engine.classify({ kind: "capabilities" }, new AbortController().signal)).toEqual({ ok: true, text: true, image: true });
+    expect(model.availability).toHaveBeenCalledTimes(2);
+    engine.close();
+  });
+
+  it("keeps an explicit keyword matching the display title as a real criterion", async () => {
+    const rule = { id: "explicit-keyword-rule", name: "Violet comet", description: "", keywords: ["Violet comet"], enabled: true };
+    loadSettings.mockResolvedValue({ ...DEFAULT_SETTINGS, rules: [rule] });
+    const { model } = mockModel();
+    const engine = new NativeAiEngine();
+    expect(await engine.classify({ kind: "text", texts: ["The Violet comet appears"] }, new AbortController().signal)).toEqual({ ok: true, decisions: [{ i: 0, block: true, ruleId: rule.id, rule: rule.name }] });
+    const fixed = JSON.stringify(model.create.mock.calls[0]);
+    expect(fixed).toContain("Keywords: Violet comet");
+    expect(fixed).toContain("boundary-1");
+    expect(fixed).not.toContain(rule.id);
+    engine.close();
+  });
+
+  it("does not invalidate model context for stored memory labels or reporting timestamps", async () => {
+    const original = { ...DEFAULT_SETTINGS.rules[0]!, name: "Private memory label A" };
+    let settings = { ...DEFAULT_SETTINGS, rules: [original] };
+    loadSettings.mockImplementation(async () => settings);
+    loadMemory.mockResolvedValue(criterionMemory(original));
+    const { model, baselines, clones } = cloneableModel('{"decisions":[{"i":0,"block":true,"rule":"boundary-1"}]}');
+    const engine = new NativeAiEngine();
+    await engine.classify(input, new AbortController().signal);
+    const renamed = { ...original, name: "Private memory label B" };
+    settings = { ...settings, rules: [renamed] };
+    loadMemory.mockResolvedValue({ ...criterionMemory(renamed), lastUpdatedAt: "2026-10-30T12:00:00Z", lastError: "Different UI status" });
+    expect(await engine.classify(input, new AbortController().signal)).toMatchObject({ decisions: [{ ruleId: original.id, rule: renamed.name }] });
+    expect(model.create).toHaveBeenCalledOnce();
+    expect(baselines[0]!.destroy).not.toHaveBeenCalled();
+    const fixed = JSON.stringify(model.create.mock.calls[0]);
+    expect(fixed).toContain("Actual lunar mission outcome");
+    expect(fixed).not.toContain(original.name);
+    expect(fixed).not.toContain(renamed.name);
+    expect(fixed).not.toContain(original.id);
+    expect(JSON.stringify(clones[0]!.prompt.mock.calls[0]![0])).toBe(JSON.stringify(clones[1]!.prompt.mock.calls[0]![0]));
     engine.close();
   });
 });

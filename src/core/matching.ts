@@ -1,4 +1,5 @@
 import type { BlockingRule, Match, Strictness } from "./types";
+import { activeCriteriaRules } from "./rule-criteria";
 
 const FALLBACK_STOP_WORDS = new Set([
   "about", "after", "also", "and", "are", "avoid", "block", "but", "can", "content", "details",
@@ -28,6 +29,7 @@ export function descriptionMatch(text: string, rules: BlockingRule[]): Match | n
   for (const rule of rules) {
     if (!rule.enabled) continue;
     const terms = fallbackTerms(rule);
+    if (!terms.length) continue;
     const matched = terms.filter((term) => source.includes(term));
     if (matched.length >= Math.min(2, terms.length)) {
       return {
@@ -55,9 +57,9 @@ export function normalizeWhitespace(text: unknown): string {
 }
 
 export function buildRulesSummary(rules: BlockingRule[]): string {
-  return rules.filter((rule) => rule.enabled).map((rule, index) => {
+  return activeCriteriaRules(rules).slice(0, 30).map((rule, index) => {
     const keywords = rule.keywords.slice(0, 20).join(", ") || "none";
-    return `${index + 1}. ${rule.name}: ${rule.description || "No description."} Keywords: ${keywords}`;
+    return `${index + 1}. boundary-${index + 1}: ${rule.description || "No description."} Keywords: ${keywords}`;
   }).join("\n");
 }
 
@@ -68,7 +70,7 @@ export function strictnessGuidance(strictness: Strictness): string {
 }
 
 function fallbackTerms(rule: BlockingRule): string[] {
-  const input = `${rule.name} ${rule.description}`;
+  const input = rule.description;
   const quoted = input.match(/"([^"]+)"|'([^']+)'/g) ?? [];
   const phrases = quoted.map((phrase) => normalizeComparableText(phrase.slice(1, -1))).filter((phrase) => phrase.length >= 4);
   const words = normalizeComparableText(input).split(" ").filter((word) => (

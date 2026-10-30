@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HOST_PORT, NATIVE_SCOPE, type NativeInput, type NativeResponse } from "../core/native-ai-protocol";
-import { SETTINGS_KEY } from "../core/settings";
+import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../core/settings";
 import { installNativeAiBroker, NativeAiBroker } from "./native-ai-broker";
 
 const { browser, updateStatus } = vi.hoisted(() => ({
@@ -376,6 +376,25 @@ describe("NativeAiBroker", () => {
     updated(99, { status: "loading" });
     await expect(fourth).resolves.toEqual(failure("unavailable"));
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps an in-flight request on label-only changes but cancels changed criteria", async () => {
+    installNativeAiBroker();
+    const connect = browser.runtime.onConnect.addListener.mock.calls[0]![0] as (port: Browser.runtime.Port) => void;
+    const message = browser.runtime.onMessage.addListener.mock.calls[0]![0] as NativeAiBroker["handleMessage"];
+    const changed = browser.storage.onChanged.addListener.mock.calls[0]![0] as (changes: Record<string, unknown>, area: string) => void;
+    const port = makePort(); connect(port.native);
+    const oldValue = { ...DEFAULT_SETTINGS };
+    const renamed = { ...oldValue, rules: oldValue.rules.map((rule) => ({ ...rule, name: "Organizational label" })) };
+    const first = message(classify(), sender()); const id = latestId(port);
+    changed({ [SETTINGS_KEY]: { oldValue, newValue: renamed } }, "sync");
+    expect(port.postMessage).not.toHaveBeenCalledWith({ type: "cancel", requestId: id });
+    port.onMessage.emit({ type: "result", requestId: id, response: RESULT });
+    await expect(first).resolves.toEqual(RESULT);
+    const second = message(classify(), sender());
+    changed({ [SETTINGS_KEY]: { oldValue: renamed, newValue: { ...renamed,
+      rules: renamed.rules.map((rule) => ({ ...rule, description: "Different explicit criteria" })) } } }, "sync");
+    await expect(second).resolves.toEqual(failure("cancelled"));
   });
 
   it("returns Promise wire responses for immediate handled runtime messages", async () => {

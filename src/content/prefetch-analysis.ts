@@ -1,6 +1,7 @@
 import { browser } from "wxt/browser";
 import { descriptionMatch, keywordMatch, normalizeWhitespace } from "../core/matching";
-import { memoryMatch } from "../core/memory";
+import { matchingMemorySignature, memoryMatch } from "../core/memory";
+import { criteriaSettings, relabelMatch } from "../core/rule-criteria";
 import type { Match, Settings, SpoilerMemory } from "../core/types";
 import { AiClassifier } from "./ai-classifier";
 import { imageMetadata, imageSourceUrls, isSpoiltNode, MASKED_TEXT_CLASS, Redactor, shouldSkipElement, type TextCandidate } from "./dom";
@@ -20,8 +21,8 @@ const MAX_INLINE_NODES = 64;
 interface ApplyJob { root: Node; nodes: Generator<Node> }
 
 export function analysisSignature(settings: Settings, memory: SpoilerMemory): string {
-  return JSON.stringify({ rules: settings.rules, strictness: settings.strictness,
-    memory: memory, enabled: settings.enabled, text: settings.scanText, images: settings.scanImages,
+  return JSON.stringify({ criteriaVersion: 2, rules: criteriaSettings(settings).rules, strictness: settings.strictness,
+    memory: matchingMemorySignature(memory, settings.rules), enabled: settings.enabled, text: settings.scanText, images: settings.scanImages,
     ai: settings.useLocalAI, vision: settings.useVision });
 }
 
@@ -181,8 +182,15 @@ export class PreparedTextApplier {
     analysis: CachedAnalysis,
     private memory: SpoilerMemory = { version: 1, enabled: false, lastUpdatedAt: "", lastError: "", entries: [], imageExamples: [], ruleRuns: {} },
   ) {
-    for (const item of analysis.matches.slice(0, 700)) this.#matches.set(normalizeWhitespace(item.text), { match: item.match, ai: item.ai !== false });
-    for (const item of (analysis.images ?? []).slice(0, 300)) this.#images.set(item.url, { alt: item.alt, match: item.match, ai: item.ai !== false });
+    for (const item of analysis.matches.slice(0, 700)) this.#matches.set(normalizeWhitespace(item.text), { match: relabelMatch(item.match, settings.rules), ai: item.ai !== false });
+    for (const item of (analysis.images ?? []).slice(0, 300)) this.#images.set(item.url, { alt: item.alt, match: relabelMatch(item.match, settings.rules), ai: item.ai !== false });
+  }
+
+  refreshLabels(settings: Settings, memory = this.memory): void {
+    this.settings = settings;
+    this.memory = memory;
+    for (const value of this.#matches.values()) value.match = relabelMatch(value.match, settings.rules);
+    for (const value of this.#images.values()) value.match = relabelMatch(value.match, settings.rules);
   }
 
   start(): void {
@@ -247,7 +255,7 @@ export class PreparedTextApplier {
     const key = normalizeWhitespace(text);
     if (location.href !== this.#url || !key || key.length > 4000) return;
     if (!this.#matches.has(key) && this.#matches.size >= 700) this.#matches.delete(this.#matches.keys().next().value!);
-    this.#matches.set(key, { match, ai });
+    this.#matches.set(key, { match: relabelMatch(match, this.settings.rules), ai });
     this.#checkedText = new WeakMap(); this.#negativeInline = new WeakMap();
     this.#reapply();
   }
@@ -257,7 +265,7 @@ export class PreparedTextApplier {
     if (!image || location.href !== this.#url) return;
     for (const url of imageSourceUrls(image, location.href)) {
       if (!this.#images.has(url) && this.#images.size >= 300) this.#images.delete(this.#images.keys().next().value!);
-      this.#images.set(url, { alt: image.alt, match, ai });
+      this.#images.set(url, { alt: image.alt, match: relabelMatch(match, this.settings.rules), ai });
     }
     this.#reapply();
   }

@@ -7,8 +7,9 @@ export const MAX_TEXT_BATCH = 18;
 export const MAX_TEXT_LENGTH = 600;
 export const MAX_IMAGE_BYTES = 1_500_000;
 export const MAX_DATA_URL_LENGTH = 2_000_050;
+export const MAX_RULE_ID_LENGTH = 200;
 
-export interface ImageDecision { block: boolean; rule?: string; reason?: string }
+export interface ImageDecision { block: boolean; ruleId?: string; rule?: string; reason?: string }
 export interface TextDecision extends ImageDecision { i: number }
 export type NativeInput =
   | { kind: "text"; texts: string[] }
@@ -53,6 +54,7 @@ export function validateNativeResponse(input: NativeInput, value: unknown): valu
 
 function validDecision(value: unknown): boolean {
   return record(value) && typeof value.block === "boolean"
+    && (value.ruleId === undefined || (typeof value.ruleId === "string" && value.ruleId.length > 0 && value.ruleId.length <= MAX_RULE_ID_LENGTH))
     && (value.rule === undefined || (typeof value.rule === "string" && value.rule.length <= 200))
     && (value.reason === undefined || (typeof value.reason === "string" && value.reason.length <= 400));
 }

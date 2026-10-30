@@ -12,6 +12,7 @@ import {
 import { updateStatus } from "./storage";
 import type { NativePriority } from "../core/native-job-queue";
 import { MEMORY_KEY } from "../core/status";
+import { criteriaSettingsChanged } from "../core/rule-criteria";
 
 const MAX_PENDING = 8;
 const MAX_PENDING_PER_OWNER = 2;
@@ -208,7 +209,8 @@ export function installNativeAiBroker(): void {
   });
   browser.tabs.onRemoved.addListener((tabId) => broker.invalidateTab(tabId));
   browser.storage.onChanged.addListener((changes, area) => {
-    if ((area === "sync" && changes[SETTINGS_KEY]) || (area === "local" && changes[MEMORY_KEY])) broker.invalidateSettings();
+    if ((area === "sync" && changes[SETTINGS_KEY] && criteriaSettingsChanged(changes[SETTINGS_KEY]))
+      || (area === "local" && changes[MEMORY_KEY])) broker.invalidateSettings();
   });
 }
 

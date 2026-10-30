@@ -6,7 +6,7 @@ export async function openPerformanceEngine(context, extensionId, delays = {}) {
     const stats = globalThis.__performanceModel = {
       creates: 0, clones: 0, baselinePrompts: 0, clonePrompts: 0,
       baselineDestroys: 0, cloneDestroys: 0, maxPriorPagePrompts: 0,
-      activePrompts: 0, textBatchStarts: [], textBatches: [], imageInputs: [], fixedContextHadPageText: false,
+      activePrompts: 0, textBatchStarts: [], textBatches: [], imageInputs: [], fixedContextHadPageText: false, fixedContextHadLabel: false,
     };
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     const session = (fixedContext, baseline, inherited = []) => {
@@ -53,13 +53,13 @@ export async function openPerformanceEngine(context, extensionId, delays = {}) {
                   width: bitmap.width, height: bitmap.height, firstPixel: [...draw.getImageData(0, 0, 1, 1).data] });
                 bitmap.close();
               }
-              return '{"block":true,"rule":"Synthetic image boundary","reason":"Synthetic red square"}';
+              return '{"block":true,"rule":"boundary-1","reason":"Synthetic red square"}';
             }
             stats.textBatches.push(items.map(item => item.text));
-            const beta = fixedContext.includes("BetaBoundary");
+            const beta = fixedContext.includes("Scenario criterion BETA_MODE");
             return JSON.stringify({ decisions: items.filter(item => item.text === (beta
               ? "Perf beta semantic outcome" : "Perf positive semantic outcome"))
-              .map(item => ({ i: item.i, block: true, rule: beta ? "BetaBoundary" : "AlphaBoundary", reason: "Synthetic semantic match" })) });
+              .map(item => ({ i: item.i, block: true, rule: "boundary-1", reason: "Synthetic semantic match" })) });
           } finally { stats.activePrompts -= 1; }
         },
       };
@@ -70,6 +70,7 @@ export async function openPerformanceEngine(context, extensionId, delays = {}) {
         stats.creates += 1;
         const fixedContext = JSON.stringify(options?.initialPrompts ?? []);
         stats.fixedContextHadPageText ||= /Perf (?:positive|harmless|beta|visible|newly|deferred)/.test(fixedContext);
+        stats.fixedContextHadLabel ||= /AlphaBoundary|BetaBoundary|Renamed organizational category/.test(fixedContext);
         await wait(createMs);
         return session(fixedContext, true);
       },

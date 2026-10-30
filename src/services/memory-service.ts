@@ -9,6 +9,7 @@ import {
   summarizeMemory,
 } from "../core/memory";
 import { MEMORY_KEY } from "../core/status";
+import { activeCriteriaRules, ruleCriteriaKey } from "../core/rule-criteria";
 import type { MemoryRuleRun, MemorySummary, SpoilerMemory } from "../core/types";
 import { loadSettings, updateStatus } from "../platform/storage";
 
@@ -29,18 +30,26 @@ export async function refreshSpoilerMemory(reason: "manual" | "alarm"): Promise<
   const imageExamples = [];
   const ruleRuns: Record<string, MemoryRuleRun> = {};
   const errors: string[] = [];
+  const rebuildRules = new Set<string>();
 
-  for (const rule of settings.rules.filter((item) => item.enabled)) {
+  for (const rule of activeCriteriaRules(settings.rules)) {
+    const query = buildRuleSearchQuery(rule);
+    if (!query) continue;
     try {
       const response = await fetchWithTimeout(buildGoogleNewsRssUrl(rule), { credentials: "omit", cache: "no-store" });
       if (!response.ok) throw new Error(`Public search returned ${response.status}.`);
       const extracted = extractRssItems(await response.text(), rule, discoveredAt);
+      const criteriaKey = ruleCriteriaKey(rule);
+      // A successful criteria-specific search can replace legacy/stale results.
+      // Until that succeeds, preserve the stored history without trusting it.
+      if (current.ruleRuns[rule.id]?.criteriaKey !== criteriaKey) rebuildRules.add(rule.id);
       entries.push(...extracted.entries);
       imageExamples.push(...extracted.imageExamples);
       ruleRuns[rule.id] = {
+        criteriaKey,
         at: discoveredAt,
         reason,
-        query: buildRuleSearchQuery(rule),
+        query,
         resultCount: extracted.entries.length,
         imageExampleCount: extracted.imageExamples.length,
       };
@@ -49,7 +58,11 @@ export async function refreshSpoilerMemory(reason: "manual" | "alarm"): Promise<
     }
   }
 
-  const merged = mergeMemory(current, {
+  const refreshedCurrent = { ...current,
+    entries: current.entries.filter((entry) => !rebuildRules.has(entry.ruleId)),
+    imageExamples: current.imageExamples.filter((image) => !rebuildRules.has(image.ruleId)),
+  };
+  const merged = mergeMemory(refreshedCurrent, {
     enabled: true,
     entries,
     imageExamples,

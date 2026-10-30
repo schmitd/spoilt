@@ -1,5 +1,5 @@
 import { normalizeWhitespace } from "../core/matching";
-import type { Match, RedactionStyle, ScanCounters, Settings } from "../core/types";
+import type { BlockingRule, Match, RedactionStyle, ScanCounters, Settings } from "../core/types";
 import { browser } from "wxt/browser";
 
 export const MASKED_TEXT_CLASS = "spoilt-redacted-text";
@@ -232,6 +232,7 @@ export class Redactor {
     span.title = `Spoilt concealed: ${match.ruleName}`;
     span.setAttribute("aria-label", "Spoilt concealed content");
     span.dataset.spoiltReason = match.reason;
+    span.dataset.spoiltRuleId = match.ruleId;
     span.dataset.spoiltStyle = style;
     parent.replaceChild(span, candidate.node);
     this.#textValues.set(span, normalizeWhitespace(span.textContent));
@@ -247,6 +248,7 @@ export class Redactor {
     shell.title = `Spoilt concealed image: ${match.ruleName}`;
     shell.setAttribute("aria-label", "Spoilt concealed image");
     shell.dataset.spoiltReason = match.reason;
+    shell.dataset.spoiltRuleId = match.ruleId;
     shell.dataset.spoiltStyle = style;
     const rect = element.getBoundingClientRect();
     if (rect.width && rect.height) {
@@ -276,6 +278,13 @@ export class Redactor {
     });
     collector.reset();
     this.counters = { text: 0, images: 0, aiText: 0, aiImages: 0 };
+  }
+
+  relabel(rules: BlockingRule[]): void {
+    for (const element of document.querySelectorAll<HTMLElement>(`.${MASKED_TEXT_CLASS}, .${IMAGE_SHELL_CLASS}`)) {
+      const rule = rules.find((item) => item.id === element.dataset.spoiltRuleId);
+      if (rule) element.title = `Spoilt concealed${element.classList.contains(IMAGE_SHELL_CLASS) ? " image" : ""}: ${rule.name}`;
+    }
   }
 
   restoreChanged(node: Node): Node {

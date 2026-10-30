@@ -1,7 +1,9 @@
-import type { Match, Settings, SpoilerMemory } from "../core/types";
+import type { BlockingRule, Match, Settings, SpoilerMemory } from "../core/types";
 import { MAX_IMAGE_BYTES, MAX_TEXT_BATCH, MAX_TEXT_LENGTH } from "../core/native-ai-protocol";
 import { NativeAiClient } from "../platform/native-ai-client";
 import { normalizeWhitespace } from "../core/matching";
+import { criteriaSettings, relabelMatch } from "../core/rule-criteria";
+import { matchingMemorySignature } from "../core/memory";
 import { inViewport, promptImageInput, type ImageCandidate, type TextCandidate } from "./dom";
 
 type Priority = "foreground" | "background" | "speculative";
@@ -24,6 +26,7 @@ export class AiClassifier {
   #scope = "";
   #generation = 0;
   #cacheTimer: ReturnType<typeof setTimeout> | undefined;
+  #rules: BlockingRule[] = [];
 
   constructor(private priority?: Priority, private diagnostics?: (value: ClassifierDiagnostics) => void) {}
 
@@ -42,7 +45,7 @@ export class AiClassifier {
     const metrics: ClassifierDiagnostics = { batches: 0, inputCharacters: 0, duplicateCandidates: 0, cacheHits: 0, maskApplyMs: 0 };
     const apply = (candidate: TextCandidate, match: Match) => {
       if (!current() || !unchanged(candidate)) return;
-      const start = performance.now(); onMatch(candidate, match); metrics.maskApplyMs += performance.now() - start;
+      const start = performance.now(); onMatch(candidate, relabelMatch(match, this.#rules)); metrics.maskApplyMs += performance.now() - start;
     };
     const add = (items: TextCandidate[]) => {
       for (const candidate of items) {
@@ -78,8 +81,8 @@ export class AiClassifier {
         for (const [index, group] of batch.entries()) {
           if (!current()) return;
           const decision = decisions.get(index);
-          const match = decision?.block ? { ruleId: "local-ai", ruleName: decision.rule || "On-device match",
-            reason: decision.reason || "on-device semantic match" } : null;
+          const match = decision?.block ? relabelMatch({ ruleId: decision.ruleId || "local-ai", ruleName: decision.rule || "On-device match",
+            reason: decision.reason || "on-device semantic match" }, this.#rules) : null;
           // A successful sparse-positive response also establishes exact negatives.
           // Prefix-only inputs are never admitted as decisions for the full text.
           if (group.text.length <= MAX_TEXT_LENGTH) this.#remember(group.text, match);
@@ -119,14 +122,17 @@ export class AiClassifier {
     }
   }
 
-  async prefetchedImages(inputs: Array<{ candidate: ImageCandidate; blob: Blob }>, settings: Settings, _memory: SpoilerMemory,
+  async prefetchedImages(inputs: Array<{ candidate: ImageCandidate; blob: Blob }>, settings: Settings, memory: SpoilerMemory,
     onMatch: (candidate: ImageCandidate, match: Match) => void, isCurrent: () => boolean): Promise<void> {
+    this.#enterScope(settings, memory);
+    const generation = this.#generation;
+    const current = () => generation === this.#generation && isCurrent();
     if (!settings.useLocalAI || !settings.useVision) return;
     for (const { candidate, blob } of inputs.slice(0, 3)) {
-      if (!isCurrent()) return;
+      if (!current()) return;
       try {
         const dataUrl = await imageDataUrl(blob);
-        if (dataUrl && isCurrent()) await this.#image(candidate, dataUrl, onMatch, isCurrent);
+        if (dataUrl && current()) await this.#image(candidate, dataUrl, onMatch, current);
       } catch { /* Optional speculation never blocks normal scanning. */ }
     }
   }
@@ -141,8 +147,14 @@ export class AiClassifier {
     this.#generation += 1; this.#scope = ""; this.#clearDecisions(); this.#client.reset();
   }
 
+  relabel(rules: BlockingRule[]): void {
+    this.#rules = rules;
+    for (const value of this.#decisions.values()) if (value.match) value.match = relabelMatch(value.match, rules);
+  }
+
   #enterScope(settings: Settings, memory: SpoilerMemory): void {
-    const scope = JSON.stringify({ url: location.href, settings, memory });
+    const scope = JSON.stringify({ url: location.href, settings: criteriaSettings(settings), memory: matchingMemorySignature(memory, settings.rules) });
+    this.relabel(settings.rules);
     if (scope === this.#scope) return;
     this.#generation += 1; this.#scope = scope; this.#clearDecisions(); this.#client.reset();
   }
@@ -188,10 +200,10 @@ export class AiClassifier {
     onMatch: (candidate: ImageCandidate, match: Match) => void, isCurrent: () => boolean): Promise<boolean> {
     const response = await this.#client.request({ kind: "image", metadata: candidate.metadataText.slice(0, 1000), dataUrl }, isCurrent,
       this.#priority(inViewport(candidate.element)));
-    if (isCurrent() && response.ok && "decision" in response && response.decision?.block) onMatch(candidate, {
-      ruleId: "local-ai-image", ruleName: response.decision.rule || "On-device image match",
+    if (isCurrent() && response.ok && "decision" in response && response.decision?.block) onMatch(candidate, relabelMatch({
+      ruleId: response.decision.ruleId || "local-ai-image", ruleName: response.decision.rule || "On-device image match",
       reason: response.decision.reason || "on-device image match",
-    });
+    }, this.#rules));
     return !response.ok && response.reason === "busy";
   }
 }
