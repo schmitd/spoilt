@@ -1,6 +1,8 @@
 import { browser } from "wxt/browser";
-import { memoryMatch, normalizeMemory } from "../core/memory";
+import { matchingMemorySignature, memoryMatch, normalizeMemory } from "../core/memory";
 import { descriptionMatch, keywordMatch, normalizeWhitespace } from "../core/matching";
+import { normalizeSettings } from "../core/settings";
+import { criteriaSettings, relabelMatch } from "../core/rule-criteria";
 import { MEMORY_KEY, STATUS_KEY } from "../core/status";
 import { MAX_TEXT_BATCH, NATIVE_RETRY_KEY } from "../core/native-ai-protocol";
 import type { Settings, SpoilerMemory } from "../core/types";
@@ -31,6 +33,9 @@ export class ContentController {
   #url = location.href;
   #saveTimer = 0;
   #configuration = 0;
+  #reloadVersion = 0;
+  #configurationDirty = false;
+  #pendingAnalysis: CachedAnalysis | undefined;
   #starting = true;
   #configurationChanged = false;
   #busyRetryTimer = 0;
@@ -49,7 +54,10 @@ export class ContentController {
       }
       if (!((area === "sync" && changes["spoilt.settings"]) || (area === "local" && changes[MEMORY_KEY]))) return;
       if (this.#starting) this.#configurationChanged = true;
-      else void this.#reloadSettings();
+      else void this.#reloadSettings({
+        ...(area === "sync" ? { settings: normalizeSettings(changes["spoilt.settings"]?.newValue) } : {}),
+        ...(area === "local" ? { memory: normalizeMemory(changes[MEMORY_KEY]?.newValue as Partial<SpoilerMemory> | undefined) } : {}),
+      });
     });
     const cachePromise = Promise.race([
       browser.runtime.sendMessage({ scope: "spoilt", type: "getPrefetchAnalysis" }).catch(() => null) as Promise<CachedAnalysis[] | CachedAnalysis | null>,
@@ -79,7 +87,7 @@ export class ContentController {
   }
 
   schedule(delay = SCAN_DEBOUNCE_MS): void {
-    if (!this.#settings.enabled || this.#timer) return;
+    if (!this.#settings.enabled || this.#configurationDirty || this.#timer) return;
     this.#timer = window.setTimeout(() => {
       this.#timer = 0;
       void this.scan().catch((error) => updateStatus({ lastError: formatError(error) }));
@@ -106,6 +114,7 @@ export class ContentController {
 
   async #scanOnce(): Promise<void> {
     this.#checkRoute();
+    if (this.#configurationDirty) return;
     if (!this.#settings.enabled) {
       this.#redactor.clear(this.#collector);
       await updateStatus({ enabled: false, counters: this.#redactor.counters, pendingText: 0, pendingImages: 0 });
@@ -150,7 +159,7 @@ export class ContentController {
         if (!isCurrent()) return;
         // Cache admission is optional: a valid live decision must still conceal
         // an unchanged original even when its text exceeds the cache limit.
-        this.#redactor.text(candidate, match, settings.redactionStyle, true);
+        this.#redactor.text(candidate, relabelMatch(match, this.#settings.rules), settings.redactionStyle, true);
         // Retain the decision even when hydration detached the original node;
         // apply only to the exact classified text on this route.
         this.#prepared?.rememberText(candidate.text, match);
@@ -176,7 +185,7 @@ export class ContentController {
       await this.#ai.images(aiImages, settings, memory, (candidate, match) => {
         if (!isCurrent() || imageMetadata(candidate.element) !== candidate.metadataText) return;
         this.#prepared?.rememberImage(candidate.element, match);
-        this.#redactor.image(candidate, match, settings.redactionStyle, true);
+        this.#redactor.image(candidate, relabelMatch(match, this.#settings.rules), settings.redactionStyle, true);
         this.#saveDecisions();
       }, isCurrent, (candidates) => {
         if (isCurrent()) {
@@ -196,22 +205,43 @@ export class ContentController {
     }
   }
 
-  async #reloadSettings(): Promise<void> {
-    this.#resetBusyRetry();
-    const configuration = ++this.#configuration;
-    const previous = this.#settings && this.#prepared?.snapshot(analysisSignature(this.#settings, this.#memory));
-    this.#prefetcher.setEnabled(false);
-    this.#run += 1;
-    window.clearTimeout(this.#saveTimer);
-    this.#saveTimer = 0;
-    this.#prepared?.stop();
-    this.#prepared = null;
+  async #reloadSettings(hint?: { settings?: Settings; memory?: SpoilerMemory }): Promise<void> {
+    const reloadVersion = ++this.#reloadVersion;
+    let invalidated = false;
+    const invalidate = () => {
+      if (invalidated) return;
+      invalidated = true;
+      this.#resetBusyRetry();
+      this.#configuration += 1;
+      if (!this.#configurationDirty) this.#pendingAnalysis = this.#settings && this.#prepared?.snapshot(analysisSignature(this.#settings, this.#memory));
+      this.#configurationDirty = true;
+      this.#prefetcher.setEnabled(false);
+      this.#run += 1;
+      window.clearTimeout(this.#timer);
+      this.#timer = 0;
+      window.clearTimeout(this.#saveTimer);
+      this.#saveTimer = 0;
+      this.#prepared?.stop();
+      this.#prepared = null;
+      void this.#ai.reset();
+    };
+    // Storage's new value lets a real criteria/privacy edit invalidate promptly,
+    // while a name-only edit keeps the live scan and its independent model call.
+    if (this.#configurationDirty || !hint || !this.#sameCriteria(hint.settings ?? this.#settings, hint.memory ?? this.#memory)) invalidate();
+    else this.#refreshLabels(hint.settings ?? this.#settings, hint.memory ?? this.#memory);
     const [settings, memory] = await Promise.all([loadSettings(), loadMemory()]);
-    if (configuration !== this.#configuration) return;
+    if (reloadVersion !== this.#reloadVersion) return;
+    if (!invalidated && !this.#configurationDirty && this.#sameCriteria(settings, memory)) {
+      this.#refreshLabels(settings, memory);
+      return;
+    }
+    invalidate();
+    const previous = this.#pendingAnalysis;
+    this.#pendingAnalysis = undefined;
+    this.#configurationDirty = false;
     this.#settings = settings;
     this.#memory = memory;
     this.#prefetcher.setEnabled(this.#settings.enabled && this.#settings.prefetchLinks);
-    void this.#ai.reset();
     this.#redactor.clear(this.#collector);
     this.#protect(previous ?? null);
     if (this.#settings.enabled) {
@@ -224,9 +254,23 @@ export class ContentController {
   }
 
   #match(text: string, settings: Settings, memory: SpoilerMemory) {
-    return keywordMatch(text, settings.rules)
+    const match = keywordMatch(text, settings.rules)
       || memoryMatch(text, settings.rules, memory)
       || descriptionMatch(text, settings.rules);
+    return match ? relabelMatch(match, this.#settings.rules) : null;
+  }
+
+  #sameCriteria(settings: Settings, memory: SpoilerMemory): boolean {
+    return JSON.stringify(criteriaSettings(this.#settings)) === JSON.stringify(criteriaSettings(settings))
+      && matchingMemorySignature(this.#memory, this.#settings.rules) === matchingMemorySignature(memory, settings.rules);
+  }
+
+  #refreshLabels(settings: Settings, memory: SpoilerMemory): void {
+    this.#settings = settings;
+    this.#memory = memory;
+    this.#prepared?.refreshLabels(settings, memory);
+    this.#redactor.relabel(settings.rules);
+    this.#ai.relabel(settings.rules);
   }
 
   #observe(): void {
@@ -367,8 +411,8 @@ export class ContentController {
       ai: settings.useLocalAI,
       vision: settings.useVision,
       style: settings.redactionStyle,
-      memory: memory.lastUpdatedAt,
-      rules: settings.rules,
+      memory: matchingMemorySignature(memory, settings.rules),
+      rules: criteriaSettings(settings).rules,
     });
   }
 

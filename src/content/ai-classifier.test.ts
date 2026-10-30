@@ -3,6 +3,7 @@ import { normalizeMemory } from "../core/memory";
 import { DEFAULT_SETTINGS } from "../core/settings";
 import { AiClassifier } from "./ai-classifier";
 import { Redactor } from "./dom";
+import { ruleCriteriaKey } from "../core/rule-criteria";
 
 const { sendMessage } = vi.hoisted(() => ({ sendMessage: vi.fn<(message: any) => Promise<unknown>>() }));
 vi.mock("wxt/browser", () => ({ browser: { runtime: { sendMessage } } }));
@@ -166,13 +167,56 @@ describe("bounded local decision reuse", () => {
     await classifier.text([appendCandidate("Synthetic stable content")], settings, memory, vi.fn(), () => true);
     if (change === "rules") settings = { ...settings, rules: [] };
     if (change === "strictness") settings = { ...settings, strictness: "strict" };
-    if (change === "memory") memory.lastError = "Changed synthetic context with the same timestamp";
+    if (change === "memory") {
+      const rule = settings.rules[0]!;
+      memory.ruleRuns[rule.id] = { criteriaKey: ruleCriteriaKey(rule), at: "", reason: "", query: "", resultCount: 1, imageExampleCount: 0 };
+      memory.entries.push({ id: "synthetic", ruleId: rule.id, title: "A newly discovered synthetic ending", snippet: "A changed actual public detail", url: "https://example.com/story", source: "Synthetic", publishedAt: "", discoveredAt: "", terms: ["ending"], reason: "Synthetic" });
+    }
     if (change === "route") history.replaceState(null, "", "#cache-route");
     if (change === "reset") await classifier.reset();
     try {
       await classifier.text([appendCandidate("Synthetic stable content")], settings, memory, vi.fn(), () => true);
       expect(sendMessage).toHaveBeenCalledTimes(2);
     } finally { history.replaceState(null, "", oldUrl); }
+  });
+
+  it("keeps positive and negative decisions across a label rename and resolves labels by stable rule id", async () => {
+    const settings = { ...DEFAULT_SETTINGS, rules: [{ id: "story", name: "Original label", description: "Battle outcomes", keywords: [], enabled: true }] };
+    const renamed = { ...settings, rules: [{ ...settings.rules[0]!, name: "Renamed label" }] };
+    sendMessage.mockResolvedValue({ ok: true, decisions: [{ i: 0, block: true, ruleId: "story", rule: "Original label" }] });
+    const classifier = new AiClassifier(); const onMatch = vi.fn();
+    const values = ["A synthetic battle outcome", "Safe synthetic gardening"];
+    await classifier.text(values.map(appendCandidate), settings, normalizeMemory(), onMatch, () => true);
+    await classifier.text(values.map(appendCandidate), renamed, normalizeMemory(), onMatch, () => true);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(onMatch).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ ruleId: "story", ruleName: "Renamed label" }));
+  });
+
+  it("keeps an in-flight request and applies its result using the latest label", async () => {
+    const settings = { ...DEFAULT_SETTINGS, rules: [{ id: "story", name: "Original label", description: "Battle outcomes", keywords: [], enabled: true }] };
+    let finish!: (value: unknown) => void;
+    sendMessage.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const classifier = new AiClassifier(); const onMatch = vi.fn();
+    const work = classifier.text([appendCandidate("A synthetic battle outcome")], settings, normalizeMemory(), onMatch, () => true);
+    classifier.relabel([{ ...settings.rules[0]!, name: "Renamed label" }]);
+    finish({ ok: true, decisions: [{ i: 0, block: true, ruleId: "story", rule: "Original label" }] });
+    await work;
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(onMatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ruleId: "story", ruleName: "Renamed label" }));
+  });
+
+  it("attributes an in-flight image decision by stable rule id after a label rename", async () => {
+    const settings = { ...DEFAULT_SETTINGS, rules: [{ id: "story", name: "Original label", description: "Battle outcomes", keywords: [], enabled: true }] };
+    let finish!: (value: unknown) => void;
+    sendMessage.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const element = document.createElement("img"); document.body.append(element);
+    const classifier = new AiClassifier("speculative"); const onMatch = vi.fn();
+    const work = classifier.prefetchedImages([{ candidate: { element, metadataText: "Synthetic scene" }, blob: new Blob(["synthetic pixels"], { type: "image/png" }) }], settings, normalizeMemory(), onMatch, () => true);
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce());
+    classifier.relabel([{ ...settings.rules[0]!, name: "Renamed label" }]);
+    finish({ ok: true, decision: { block: true, ruleId: "story", rule: "Original label" } });
+    await work;
+    expect(onMatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ruleId: "story", ruleName: "Renamed label" }));
   });
 
   it("does not populate the cache from an operation cancelled by reset", async () => {

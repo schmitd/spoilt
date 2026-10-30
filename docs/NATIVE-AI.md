@@ -2,6 +2,13 @@
 
 Spoilt uses Chrome's built-in Prompt API for local semantic text and image classification. Keyword, description, and optional recent-knowledge matching remain available when the native model cannot run. A Chrome version alone does not establish model availability: hardware, disk space, profile eligibility, and Chrome's model state also matter.
 
+Boundary titles are organizational labels. Native prompts contain criteria and
+opaque boundary aliases, never display names. The extension maps an alias to its
+stable rule ID and current display name only after classification. Name-only edits
+refresh labels while preserving in-flight work, decisions and fixed-context
+sessions. A boundary with no description or explicit keywords is inactive for
+matching, even if it has a name.
+
 ## Setup
 
 1. Enable **Use on-device analysis** in Manage boundaries. Image analysis is optional.

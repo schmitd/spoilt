@@ -69,6 +69,21 @@ function changeSettings(patch: Partial<Settings>) {
 }
 
 describe("analysis preparation eligibility", () => {
+  it("does not cancel an in-flight native request when only its label changes", async () => {
+    await start();
+    let finish!: (value: string) => void;
+    session.prompt.mockImplementation(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const receive = addPortMessageListener.mock.calls[0]![0] as (message: unknown) => void;
+    const requestId = crypto.randomUUID();
+    receive({ type: "classify", requestId, input: { kind: "text", texts: ["Synthetic independent content"] } });
+    await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce());
+    const oldValue = settings;
+    settings = { ...settings, rules: settings.rules.map((rule) => ({ ...rule, name: "Renamed label" })) };
+    const changes = { [SETTINGS_KEY]: { oldValue, newValue: settings } };
+    for (const [listener] of addChangeListener.mock.calls) listener(changes, "sync");
+    finish('{"decisions":[]}');
+    await vi.waitFor(() => expect(postPortMessage).toHaveBeenCalledWith({ type: "result", requestId, response: { ok: true, decisions: [] } }));
+  });
   it("returns busy for queue wait without spending a queued request's execution budget", async () => {
     await start();
     session.prompt.mockImplementation(() => new Promise<string>(() => undefined));

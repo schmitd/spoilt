@@ -98,6 +98,13 @@ model. It verifies session reuse, exact decision reuse, positive/negative contro
 and configuration invalidation, and writes numeric evidence under
 `.artifacts/performance/`. It does not establish native model accuracy or GPU speed.
 
+Label regressions cover direct and image-metadata prefilters, opaque AI attribution,
+title-only rules, explicit keywords equal to a title, in-flight renames, prepared/live
+cache reuse, and criterion-bound recent knowledge. The production-browser case
+renames an active boundary, verifies masks and model-call counts stay unchanged,
+and confirms title text alone remains visible. Real criterion edits still invalidate
+the old decisions.
+
 ```bash
 npm test
 ```

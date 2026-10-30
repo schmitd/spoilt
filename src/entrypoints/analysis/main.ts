@@ -7,6 +7,7 @@ import { NativeJobQueue, NativeQueueBusyError, type NativePriority } from "../..
 import { AiDiagnostics } from "../../core/ai-diagnostics";
 import { MEMORY_KEY } from "../../core/status";
 import { SETTINGS_KEY } from "../../core/settings";
+import { criteriaSettingsChanged } from "../../core/rule-criteria";
 import "./style.css";
 
 const diagnostics = new AiDiagnostics();
@@ -237,7 +238,8 @@ for (const kind of modelKinds) {
 }
 
 const invalidateConfiguration = (changes: Record<string, Browser.storage.StorageChange>, area: string) => {
-  if (!((area === "sync" && changes[SETTINGS_KEY]) || (area === "local" && changes[MEMORY_KEY]))) return;
+  if (!((area === "sync" && changes[SETTINGS_KEY] && criteriaSettingsChanged(changes[SETTINGS_KEY]))
+    || (area === "local" && changes[MEMORY_KEY]))) return;
   for (const job of jobs.values()) job.abort();
   engine.invalidate();
 };

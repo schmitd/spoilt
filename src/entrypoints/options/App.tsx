@@ -175,7 +175,7 @@ export function App() {
 
         <section class="settings-section settings-section--rules" aria-labelledby="rules-title">
           <div class="section-heading section-heading--actions">
-            <div><span>5</span><div><h2 id="rules-title">Your boundaries</h2><p>Name what you want to avoid and give Spoilt examples.</p></div></div>
+            <div><span>5</span><div><h2 id="rules-title">Your boundaries</h2><p>Names are labels. Set matching criteria in the description and keywords.</p></div></div>
             <Button icon={<Plus size={18} />} onClick={() => setDraft((current) => current ? { ...current, rules: [...current.rules, createRule(current.rules.length)] } : current)}>Add boundary</Button>
           </div>
           <div class="rules-list">

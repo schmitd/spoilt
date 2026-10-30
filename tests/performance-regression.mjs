@@ -52,7 +52,9 @@ try {
     const current = (await chrome.storage.sync.get("spoilt.settings"))["spoilt.settings"] || {};
     await chrome.storage.sync.set({ "spoilt.settings": { ...current, ...patch } });
   }, patch);
-  const rule = name => ({ id: "synthetic-boundary", name, description: "", keywords: ["unmatched-fixture-marker"], enabled: true });
+  const rule = (name, mode = "Alpha") => ({ id: "synthetic-boundary", name,
+    description: mode === "Beta" ? "Scenario criterion BETA_MODE" : "Scenario criterion ALPHA_MODE",
+    keywords: ["unmatched-fixture-marker"], enabled: true });
   await settings({ enabled: true, prefetchLinks: false, useLocalAI: true, useVision: false,
     scanText: true, scanImages: false, memoryEnabled: false, rules: [rule("AlphaBoundary")] });
   engine = await openPerformanceEngine(context, extensionId);
@@ -112,6 +114,21 @@ try {
     syntheticMutationToClassificationMs: round(performance.now() - warmStart), baselineCreates: snapshot.creates,
     independentClones: snapshot.clones, priorPagePrompts: snapshot.maxPriorPagePrompts,
   });
+  const beforeRename = snapshot;
+  await settings({ rules: [rule("Renamed organizational category")] });
+  await until(async () => (await page.locator('#positive-a .spoilt-redacted-text').getAttribute("title"))?.includes("Renamed organizational category"), "updated display label");
+  await page.waitForTimeout(250);
+  snapshot = await stats();
+  assert.equal(snapshot.textBatches.length, beforeRename.textBatches.length, "Renaming a label repeated semantic decisions");
+  assert.equal(snapshot.creates, beforeRename.creates, "Renaming a label recreated a fixed-context baseline");
+  assert.equal(await page.locator('[id^="positive-"] .spoilt-redacted-text').count(), 3, "Rename changed positive decisions");
+  assert.equal(snapshot.fixedContextHadLabel, false, "An organizational title leaked into native classification context");
+  await page.evaluate(() => { const p=document.createElement("p"); p.id="label-only"; p.textContent="Renamed organizational category"; document.querySelector("main").append(p); });
+  await until(async () => occurrences(await stats(), "Renamed organizational category") === 1, "label text classified as ordinary content");
+  assert.equal(await page.locator('#label-only .spoilt-redacted-text').count(), 0, "Display title became matching content");
+  check("renaming changes displayed labels without changing filtering or model context", {
+    renameAdditionalBatches: 0, renameAdditionalBaselines: 0, titleTextUnmasked: true, nativeContextContainsTitle: false,
+  });
   await page.close();
 
   const priorityPage = await context.newPage();
@@ -147,7 +164,7 @@ try {
   await until(async () => (await scopePage.locator('[id^="positive-"] .spoilt-redacted-text').count()) === 3, "initial scoped positive decisions");
   await until(async () => (await stats()).activePrompts === 0, "scoped initial completion");
   const beforeSettings = await stats();
-  await settings({ rules: [rule("BetaBoundary")] });
+  await settings({ rules: [rule("BetaBoundary", "Beta")] });
   await until(async () => (await scopePage.locator('#beta .spoilt-redacted-text').count()) === 1
     && (await scopePage.locator('[id^="positive-"] .spoilt-redacted-text').count()) === 0, "changed boundaries replace exact decisions");
   snapshot = await stats();

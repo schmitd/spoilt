@@ -10,6 +10,11 @@ Spoilt is a privacy-first Chrome extension for creating healthy boundaries aroun
 - **Progressive enhancement:** Chrome's on-device Prompt API improves semantic text and image matching when available.
 - **Transparent memory:** optional public-news lookups keep active subjects current and store the resulting references locally.
 
+Boundary names are display labels. Matching uses only the configured description,
+explicit keywords, and recent knowledge derived from those criteria. Renaming a
+boundary updates its displayed label without changing existing decisions or
+repeating AI classification. A name with no criteria does not conceal content.
+
 ## Architecture
 
 Spoilt uses:

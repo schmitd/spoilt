@@ -4,6 +4,7 @@ import { DEFAULT_SETTINGS } from "../core/settings";
 import { Redactor } from "./dom";
 import { browser } from "wxt/browser";
 import { analysisSignature, collectPrefetchedText, precomputePage, PreparedTextApplier } from "./prefetch-analysis";
+import { ruleCriteriaKey } from "../core/rule-criteria";
 
 vi.mock("wxt/browser", () => ({ browser: { runtime: { sendMessage: vi.fn() } } }));
 vi.mock("../platform/storage", () => ({ updateStatus: vi.fn() }));
@@ -165,10 +166,53 @@ describe("prepared page analysis", () => {
     applier.stop();
   });
   it("invalidates cached decisions when boundaries or memory change", () => {
-    const memory = normalizeMemory();
+    const rule = DEFAULT_SETTINGS.rules[0]!;
+    const memory = normalizeMemory({
+      ruleRuns: { [rule.id]: { criteriaKey: ruleCriteriaKey(rule), at: "", reason: "", query: "", resultCount: 1, imageExampleCount: 0 } },
+      entries: [{ id: "synthetic", ruleId: rule.id, title: "A synthetic recent reveal", snippet: "Original public detail", url: "https://example.com/story", source: "Synthetic", publishedAt: "", discoveredAt: "", terms: ["reveal"], reason: "Synthetic" }],
+    });
     const signature = analysisSignature(DEFAULT_SETTINGS, memory);
     expect(analysisSignature({ ...DEFAULT_SETTINGS, strictness: "strict" }, memory)).not.toBe(signature);
-    expect(analysisSignature(DEFAULT_SETTINGS, { ...memory, lastUpdatedAt: "new" })).not.toBe(signature);
+    expect(analysisSignature(DEFAULT_SETTINGS, { ...memory, lastUpdatedAt: "new" })).toBe(signature);
+    expect(analysisSignature(DEFAULT_SETTINGS, { ...memory, entries: [{ ...memory.entries[0]!, snippet: "Changed public detail" }] })).not.toBe(signature);
+  });
+
+  it("keeps a current-version signature across renames and rejects the old title-derived signature shape", () => {
+    const memory = normalizeMemory();
+    const settings = { ...DEFAULT_SETTINGS, rules: [{ id: "topic", name: "Original label", description: "Battle outcomes", keywords: [], enabled: true }] };
+    const renamed = { ...settings, rules: [{ ...settings.rules[0]!, name: "Renamed label" }] };
+    expect(analysisSignature(renamed, memory)).toBe(analysisSignature(settings, memory));
+    const old = JSON.stringify({ rules: settings.rules, strictness: settings.strictness, memory, enabled: settings.enabled,
+      text: settings.scanText, images: settings.scanImages, ai: settings.useLocalAI, vision: settings.useVision });
+    expect(analysisSignature(settings, memory)).not.toBe(old);
+  });
+
+  it("refreshes prepared positive labels and keeps the same mask through a rename", () => {
+    const settings = { ...DEFAULT_SETTINGS, rules: [{ id: "topic", name: "Original label", description: "Battle outcomes", keywords: [], enabled: true }] };
+    const renamed = { ...settings, rules: [{ ...settings.rules[0]!, name: "Renamed label" }] };
+    document.body.innerHTML = "<p>A synthetic battle outcome</p>";
+    const redactor = new Redactor();
+    const applier = new PreparedTextApplier(redactor, settings, { url: location.href, signature: analysisSignature(settings, normalizeMemory()), createdAt: Date.now(),
+      matches: [{ text: "A synthetic battle outcome", match: { ruleId: "topic", ruleName: "Outdated saved label", reason: "semantic" } }] });
+    applier.start();
+    const mask = document.querySelector<HTMLElement>(".spoilt-redacted-text")!;
+    expect(mask.title).toContain("Original label");
+    applier.refreshLabels(renamed); redactor.relabel(renamed.rules);
+    expect(document.querySelector(".spoilt-redacted-text")).toBe(mask);
+    expect(mask.title).toContain("Renamed label");
+    expect(applier.snapshot(analysisSignature(renamed, normalizeMemory())).matches[0]!.match.ruleName).toBe("Renamed label");
+    applier.stop();
+  });
+
+  it("does not prepare text or image matches from a filter label alone", async () => {
+    const send = vi.mocked(browser.runtime.sendMessage); send.mockReset(); send.mockResolvedValue(undefined as never);
+    const settings = { ...DEFAULT_SETTINGS, prefetchLinks: true, useLocalAI: false,
+      rules: [{ id: "topic", name: "Galactic finale", description: "Accounting rates", keywords: [], enabled: true }] };
+    const html = '<p>Galactic finale</p><img src="/scene.png" alt="Galactic finale">';
+    await precomputePage("https://example.com/story", html, settings, normalizeMemory(), new AbortController().signal);
+    expect(send).not.toHaveBeenCalled();
+    await precomputePage("https://example.com/story", html, { ...settings, rules: [{ ...settings.rules[0]!, keywords: ["Galactic finale"] }] }, normalizeMemory(), new AbortController().signal);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: "savePrefetchAnalysis", analysis: expect.objectContaining({ matches: expect.arrayContaining([expect.objectContaining({ text: "Galactic finale" })]), images: expect.arrayContaining([expect.objectContaining({ alt: "Galactic finale" })]) }) }));
   });
   it("masks a prepared image only when its source and description still match", async () => {
     const redactor = new Redactor();

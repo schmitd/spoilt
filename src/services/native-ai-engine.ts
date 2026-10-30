@@ -1,9 +1,10 @@
-import { buildMemoryContext } from "../core/memory";
+import { buildMemoryContext, matchingMemorySignature } from "../core/memory";
 import { buildRulesSummary, strictnessGuidance } from "../core/matching";
 import { parseModelJson } from "../core/model-json";
+import { activeCriteriaRules, criteriaSettings } from "../core/rule-criteria";
 import { SerialQueue } from "../core/serial-queue";
-import { validateNativeInput, validateNativeResponse, type NativeInput, type NativeResponse } from "../core/native-ai-protocol";
-import type { Settings, SpoilerMemory } from "../core/types";
+import { MAX_RULE_ID_LENGTH, validateNativeInput, validateNativeResponse, type ImageDecision, type NativeInput, type NativeResponse } from "../core/native-ai-protocol";
+import type { BlockingRule, Settings, SpoilerMemory } from "../core/types";
 import { loadSettings, updateStatus } from "../platform/storage";
 import { loadMemory } from "./memory-service";
 
@@ -83,7 +84,7 @@ export class NativeAiEngine {
     if (this.#preparing) return { ok: false, reason: "busy" };
     if (this.#closed || signal.aborted) return { ok: false, reason: "cancelled" };
     const settings = await this.#measure(input.kind, "settings", () => abortable(loadSettings(), signal));
-    const settingsSignature = JSON.stringify(settings);
+    const settingsSignature = JSON.stringify(criteriaSettings(settings));
     if (settingsSignature !== this.#settingsSignature) this.#clearBaselines();
     this.#settingsSignature = settingsSignature;
     if (!settings.enabled || !settings.useLocalAI) return { ok: false, reason: "unavailable" };
@@ -92,6 +93,9 @@ export class NativeAiEngine {
       return { ok: true, text: text === "available", image: image === "available" };
     }
     if (input.kind === "image" && !settings.useVision) return { ok: false, reason: "unavailable" };
+    if (!activeCriteriaRules(settings.rules).length) {
+      return input.kind === "text" ? { ok: true, decisions: [] } : { ok: true, decision: { block: false } };
+    }
     const kind = input.kind;
     if (await this.#measure(kind, "availability", () => abortable(this.availability(kind), signal)) !== "available") {
       this.#dropBaseline(kind);
@@ -99,7 +103,7 @@ export class NativeAiEngine {
       return { ok: false, reason: "unavailable" };
     }
     const memory = settings.memoryEnabled ? await this.#measure(kind, "memory", () => abortable(loadMemory(), signal)) : null;
-    const memorySignature = JSON.stringify(memory);
+    const memorySignature = memory ? matchingMemorySignature(memory, settings.rules) : "None.";
     if (memorySignature !== this.#memorySignature) this.#clearBaselines();
     this.#memorySignature = memorySignature;
     const fixedContext = context(settings, memory);
@@ -137,6 +141,18 @@ export class NativeAiEngine {
         if (!validateNativeResponse(input, response)) throw new Error("Model returned an invalid classification.");
         if (signal.aborted) return { ok: false, reason: "cancelled" };
         await abortable(updateStatus({ [kind === "text" ? "aiText" : "aiVision"]: "available", aiReason: "On-device analysis completed in Spoilt's analysis window. Keep that window open while browsing.", lastError: "" }), signal);
+        // Names are display metadata. Read the current labels only after native
+        // inference; a rename neither enters the prompt nor invalidates context.
+        const current = await abortable(loadSettings(), signal);
+        const currentSignature = JSON.stringify(criteriaSettings(current));
+        if (currentSignature !== settingsSignature) {
+          this.#clearBaselines();
+          this.#settingsSignature = currentSignature;
+          return { ok: false, reason: "cancelled" };
+        }
+        const rules = activeCriteriaRules(current.rules).slice(0, 30);
+        if ("decisions" in response) return { ok: true, decisions: response.decisions.map((decision) => attributeDecision(decision, rules)) };
+        if ("decision" in response) return { ok: true, decision: response.decision && attributeDecision(response.decision, rules) };
         return response;
       } catch (error) {
         if (signal.aborted) return { ok: false, reason: "cancelled" };
@@ -294,18 +310,31 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 function context(settings: Settings, memory: SpoilerMemory | null): string {
-  const rules = settings.rules.filter((rule) => rule.enabled).slice(0, 30).map((rule) => ({
-    ...rule, name: rule.name.slice(0, 200), description: rule.description.slice(0, 2000), keywords: rule.keywords.slice(0, 20).map((keyword) => keyword.slice(0, 80)),
+  const rules = activeCriteriaRules(settings.rules).slice(0, 30);
+  const bounded = rules.map((rule) => ({
+    ...rule, name: "", description: rule.description.trim().slice(0, 2000),
+    keywords: rule.keywords.filter((keyword) => keyword.trim()).slice(0, 20).map((keyword) => keyword.trim().slice(0, 80)),
   }));
-  const recent = memory ? rules.map((rule) => buildMemoryContext(memory, rule.id, 5).slice(0, 1500)).join("\n").slice(0, 8000) : "None.";
-  return `User boundaries:\n${buildRulesSummary(rules).slice(0, 20_000)}\n\nRecent public context:\n${recent}\n\nStrictness: ${strictnessGuidance(settings.strictness)}`;
+  const recent = memory ? rules.map((rule, index) => {
+    const detail = buildMemoryContext(memory, rule, 5).slice(0, 1500);
+    return detail ? `boundary-${index + 1}:\n${detail}` : "";
+  }).filter(Boolean).join("\n").slice(0, 8000) : "";
+  return `User boundaries:\n${buildRulesSummary(bounded).slice(0, 20_000)}\n\nRecent public context:\n${recent || "None."}\n\nStrictness: ${strictnessGuidance(settings.strictness)}`;
 }
 
 function textPrompt(texts: string[]): string {
-  return `Evaluate every snippet independently against the boundaries. Return only JSON {"decisions":[{"i":0,"block":true,"rule":"boundary name","reason":"short reason"}]}. Include only positive matches; omit safe snippets and return {"decisions":[]} when none match. Preserve exact snippet indices and matching boundary names. Keep each reason within 80 characters. Snippets:\n${JSON.stringify(texts.map((text, i) => ({ i, text })))}`;
+  return `Evaluate every snippet independently against the boundaries. Return only JSON {"decisions":[{"i":0,"block":true,"rule":"boundary-1","reason":"short reason"}]}. Include only positive matches; omit safe snippets and return {"decisions":[]} when none match. Preserve exact snippet indices and use the matching opaque boundary alias from the context. Keep each reason within 80 characters. Snippets:\n${JSON.stringify(texts.map((text, i) => ({ i, text })))}`;
 }
 function imagePrompt(metadata: string): string {
-  return `Image description and nearby text: ${metadata || "none"}\n\nReturn only JSON {"block":false} if safe, otherwise {"block":true,"rule":"matching boundary name","reason":"short reason"}. Keep the reason within 80 characters.`;
+  return `Image description and nearby text: ${metadata || "none"}\n\nReturn only JSON {"block":false} if safe, otherwise {"block":true,"rule":"boundary-1","reason":"short reason"}. Use the matching opaque boundary alias from the context. Keep the reason within 80 characters.`;
+}
+
+function attributeDecision<T extends ImageDecision>(decision: T, rules: BlockingRule[]): T {
+  const { rule: alias, ruleId: _untrustedId, ...result } = decision;
+  const index = typeof alias === "string" ? /^boundary-([1-9]\d*)$/.exec(alias) : null;
+  const rule = decision.block && index ? rules[Number(index[1]) - 1] : undefined;
+  if (!rule || !rule.id || rule.id.length > MAX_RULE_ID_LENGTH) return result as T;
+  return { ...result, ruleId: rule.id, rule: rule.name.slice(0, 200) } as T;
 }
 function imageBlob(dataUrl: string): Blob {
   const [header, encoded = ""] = dataUrl.split(",");

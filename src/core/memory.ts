@@ -1,4 +1,5 @@
 import { normalizeComparableText } from "./matching";
+import { activeCriteriaRules, ruleCriteriaKey } from "./rule-criteria";
 import type {
   BlockingRule,
   Match,
@@ -37,13 +38,17 @@ export function normalizeMemory(value?: Partial<SpoilerMemory> | null): SpoilerM
 }
 
 export function buildRuleSearchQuery(rule: BlockingRule): string {
-  const pieces = [rule.name, rule.description, ...rule.keywords.slice(0, 8)].filter(Boolean).join(" ");
-  const terms = significantTerms(pieces, 12);
-  return terms.length ? terms.join(" ") : rule.name || "spoiler";
+  // Explicit keywords are criteria even when short (for example NBA or F1).
+  // Labels and a generic fallback must never create a public search on their own.
+  const keywords = rule.keywords.map((keyword) => normalizeComparableText(keyword)).filter(Boolean).slice(0, 8);
+  const terms = [...new Set([...keywords, ...significantTerms(rule.description, 12)])].slice(0, 12);
+  return terms.join(" ");
 }
 
 export function buildGoogleNewsRssUrl(rule: BlockingRule): string {
-  const query = `${buildRuleSearchQuery(rule)} spoiler OR leak OR ending OR reveal`;
+  const criteria = buildRuleSearchQuery(rule);
+  if (!criteria) return "";
+  const query = `${criteria} spoiler OR leak OR ending OR reveal`;
   return `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
 }
 
@@ -73,7 +78,7 @@ export function extractRssItems(xml: string, rule: BlockingRule, discoveredAt: s
       publishedAt,
       discoveredAt,
       terms,
-      reason: `Recent public result for ${rule.name || "configured boundary"}`,
+      reason: "Recent public result for configured criteria",
     });
     for (const imageUrl of extractImageUrls(block, rawDescription).slice(0, 2)) {
       imageExamples.push({
@@ -108,22 +113,38 @@ export function mergeMemory(
   };
 }
 
-export function buildMemoryContext(memory: SpoilerMemory, ruleId: string, limit = 6): string {
+export function buildMemoryContext(memory: SpoilerMemory, rule: BlockingRule | string, limit = 6): string {
   const normalized = normalizeMemory(memory);
-  const lines = normalized.entries.filter((entry) => entry.ruleId === ruleId).slice(0, limit).map((entry) => (
-    `Detail: ${entry.title || entry.snippet}. Terms: ${entry.terms.slice(0, 6).join(", ")}. Why: ${entry.reason}`
+  // An id alone cannot establish which criteria produced stored public results.
+  if (typeof rule === "string" || !hasCurrentCriteria(normalized, rule)) return "";
+  const lines = normalized.entries.filter((entry) => entry.ruleId === rule.id).slice(0, limit).map((entry) => (
+    `Detail: ${entry.title}. Summary: ${entry.snippet}. Terms: ${entry.terms.slice(0, 6).join(", ")}. Source: ${entry.source}. URL: ${entry.url}`
   ));
-  lines.push(...normalized.imageExamples.filter((entry) => entry.ruleId === ruleId).slice(0, 4).map((image) => (
-    `Spoiler image example: ${image.title || image.imageUrl}. Label: ${image.label}. Why: ${image.reason}`
+  lines.push(...normalized.imageExamples.filter((entry) => entry.ruleId === rule.id).slice(0, 4).map((image) => (
+    `Public image example: ${image.title}. Image URL: ${image.imageUrl}. Source URL: ${image.sourceUrl}`
   )));
   return lines.join("\n");
+}
+
+/** Only data used for matching/model context; presentation and refresh bookkeeping are excluded. */
+export function matchingMemorySignature(memory: SpoilerMemory, rules: BlockingRule[]): string {
+  const normalized = normalizeMemory(memory);
+  return JSON.stringify(activeCriteriaRules(rules).filter((rule) => hasCurrentCriteria(normalized, rule)).flatMap((rule) => {
+    const entries = normalized.entries.filter((entry) => entry.ruleId === rule.id).slice(0, 12).map((entry) => ({
+      title: entry.title, snippet: entry.snippet, terms: entry.terms, source: entry.source, url: entry.url,
+    }));
+    const images = normalized.imageExamples.filter((image) => image.ruleId === rule.id).slice(0, 4).map((image) => ({
+      title: image.title, imageUrl: image.imageUrl, sourceUrl: image.sourceUrl,
+    }));
+    return entries.length || images.length ? [{ ruleId: rule.id, criteriaKey: ruleCriteriaKey(rule), entries, images }] : [];
+  }));
 }
 
 export function memoryMatch(text: string, rules: BlockingRule[], memory: SpoilerMemory): Match | null {
   const source = normalizeComparableText(text);
   if (!source) return null;
   for (const rule of rules) {
-    if (!rule.enabled) continue;
+    if (!hasCurrentCriteria(memory, rule)) continue;
     const entries = memory.entries.filter((entry) => entry.ruleId === rule.id).slice(0, 12);
     for (const entry of entries) {
       const phrase = normalizeComparableText(entry.title);
@@ -138,6 +159,11 @@ export function memoryMatch(text: string, rules: BlockingRule[], memory: Spoiler
     }
   }
   return null;
+}
+
+function hasCurrentCriteria(memory: SpoilerMemory, rule: BlockingRule): boolean {
+  return memory.enabled && activeCriteriaRules([rule]).length > 0
+    && memory.ruleRuns[rule.id]?.criteriaKey === ruleCriteriaKey(rule);
 }
 
 export function summarizeMemory(memory: SpoilerMemory): MemorySummary {
