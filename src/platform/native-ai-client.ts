@@ -1,5 +1,6 @@
 import { browser } from "wxt/browser";
 import { NATIVE_SCOPE, validateNativeResponse, type NativeInput, type NativeResponse } from "../core/native-ai-protocol";
+import type { NativePriority } from "../core/native-job-queue";
 
 const MAX_BUSY_RETRIES = 10;
 
@@ -7,7 +8,7 @@ const MAX_BUSY_RETRIES = 10;
 export class NativeAiClient {
   #pending = new Map<string, () => void>();
 
-  async request(input: NativeInput, isCurrent: () => boolean = () => true): Promise<NativeResponse> {
+  async request(input: NativeInput, isCurrent: () => boolean = () => true, priority: NativePriority = "background"): Promise<NativeResponse> {
     const requestId = crypto.randomUUID();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -27,14 +28,14 @@ export class NativeAiClient {
         inFlight = true;
         timer = setTimeout(this.#pending.get(requestId)!, 26_000);
         const response = await Promise.race([
-          browser.runtime.sendMessage({ scope: NATIVE_SCOPE, type: "classify", requestId, input }),
+          browser.runtime.sendMessage({ scope: NATIVE_SCOPE, type: "classify", requestId, input, priority }),
           cancellation,
         ]);
         clearTimeout(timer);
         timer = undefined;
         inFlight = false;
         if (!validateNativeResponse(input, response)) return { ok: false, reason: "failed" };
-        if (response.ok || response.reason !== "busy" || attempt >= MAX_BUSY_RETRIES) return response;
+        if (response.ok || response.reason !== "busy" || priority === "speculative" || attempt >= MAX_BUSY_RETRIES) return response;
         // Keep the rejected batch in its caller. Jitter spreads documents woken
         // together, and a finite budget prevents a permanently busy hot loop.
         const delay = Math.round(Math.min(250 * 2 ** attempt, 4000) * (0.75 + Math.random() / 2));

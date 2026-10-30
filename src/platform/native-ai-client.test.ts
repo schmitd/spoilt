@@ -9,6 +9,13 @@ beforeEach(() => { vi.useFakeTimers(); sendMessage.mockReset(); vi.spyOn(Math, "
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("NativeAiClient busy retry ownership", () => {
+  it("yields speculative work immediately instead of retrying against live analysis", async () => {
+    sendMessage.mockResolvedValue({ ok: false, reason: "busy" });
+    await expect(new NativeAiClient().request(input, () => true, "speculative")).resolves.toEqual({ ok: false, reason: "busy" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]![0].priority).toBe("speculative");
+  });
   it("settles immediately on reset during a retry delay and clears its timer", async () => {
     sendMessage.mockResolvedValue({ ok: false, reason: "busy" });
     const client = new NativeAiClient();

@@ -68,7 +68,7 @@ export async function precomputePage(url: string, html: string, settings: Settin
     }
   }
   const signature = analysisSignature(settings, memory);
-  const classifier = new AiClassifier();
+  const classifier = new AiClassifier("speculative");
   const cancel = () => { void classifier.reset(); };
   signal.addEventListener("abort", cancel, { once: true });
   try {

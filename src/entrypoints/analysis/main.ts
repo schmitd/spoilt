@@ -3,9 +3,20 @@ import { HOST_PORT, NATIVE_RETRY_KEY, validRequestId, validateNativeInput } from
 import type { Settings } from "../../core/types";
 import { loadSettings, watchSettings } from "../../platform/storage";
 import { NativeAiEngine } from "../../services/native-ai-engine";
+import { NativeJobQueue, NativeQueueBusyError, type NativePriority } from "../../core/native-job-queue";
+import { AiDiagnostics } from "../../core/ai-diagnostics";
+import { MEMORY_KEY } from "../../core/status";
+import { SETTINGS_KEY } from "../../core/settings";
 import "./style.css";
 
-const engine = new NativeAiEngine();
+const diagnostics = new AiDiagnostics();
+const recordDiagnostic = (event: unknown) => {
+  diagnostics.record(event);
+  const output = document.querySelector("#performance-data");
+  if (output) output.textContent = JSON.stringify(diagnostics.snapshot(), null, 2);
+};
+const engine = new NativeAiEngine({ onDiagnostic: recordDiagnostic });
+const queue = new NativeJobQueue();
 const main = document.querySelector("main")!;
 const connection = document.querySelector("#connection")!;
 const minimizeAfterSetup = document.querySelector<HTMLInputElement>("#minimize-after-setup")!;
@@ -51,17 +62,25 @@ function connect() {
       const requestId = value.requestId;
       if (value.type === "cancel") { jobs.get(requestId)?.abort(); return; }
       if (value.type !== "classify" || !validateNativeInput(value.input)) return;
+      if (value.priority !== undefined && !["foreground", "background", "speculative"].includes(String(value.priority))) return;
       if (jobs.size >= 8 || jobs.has(requestId) || preparing) {
         reply(next, requestId, { ok: false, reason: "busy" });
         return;
       }
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 20_000);
+      let timer: ReturnType<typeof setTimeout> | undefined;
       jobs.set(requestId, controller);
-      void engine.classify(value.input, controller.signal).then((response) => {
+      const input = value.input;
+      const priority = (value.priority ?? "background") as NativePriority;
+      void queue.run(() => engine.classify(input, controller.signal), {
+        priority, signal: controller.signal,
+        onStart: () => { timer = setTimeout(() => controller.abort(), 20_000); },
+        onWait: (durationMs) => recordDiagnostic({ kind: input.kind, phase: "scheduling", durationMs }),
+      }).then((response) => {
         reply(next, requestId, response);
-      }).catch(() => {
-        reply(next, requestId, { ok: false, reason: "failed" });
+      }).catch((error) => {
+        reply(next, requestId, { ok: false, reason: error instanceof NativeQueueBusyError ? "busy"
+          : controller.signal.aborted ? "cancelled" : "failed" });
       }).finally(() => { clearTimeout(timer); jobs.delete(requestId); });
     });
     next.onDisconnect.addListener(() => {
@@ -217,6 +236,12 @@ for (const kind of modelKinds) {
   });
 }
 
+const invalidateConfiguration = (changes: Record<string, Browser.storage.StorageChange>, area: string) => {
+  if (!((area === "sync" && changes[SETTINGS_KEY]) || (area === "local" && changes[MEMORY_KEY]))) return;
+  for (const job of jobs.values()) job.abort();
+  engine.invalidate();
+};
+browser.storage.onChanged.addListener(invalidateConfiguration);
 const stopWatchingSettings = watchSettings((settings) => { void refreshAvailability(settings); });
 window.addEventListener("focus", refreshOnFocus);
 document.addEventListener("visibilitychange", refreshWhenVisible);
@@ -225,6 +250,7 @@ window.addEventListener("pagehide", () => {
   ++refreshVersion;
   ++windowVersion;
   stopWatchingSettings();
+  browser.storage.onChanged.removeListener(invalidateConfiguration);
   if (watchingTabAttachments) browser.tabs.onAttached.removeListener(refreshOnOwnTabAttached);
   window.removeEventListener("focus", refreshOnFocus);
   document.removeEventListener("visibilitychange", refreshWhenVisible);

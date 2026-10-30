@@ -10,6 +10,8 @@ import {
   type NativeResponse,
 } from "../core/native-ai-protocol";
 import { updateStatus } from "./storage";
+import type { NativePriority } from "../core/native-job-queue";
+import { MEMORY_KEY } from "../core/status";
 
 const MAX_PENDING = 8;
 const MAX_PENDING_PER_OWNER = 2;
@@ -41,6 +43,7 @@ interface PendingRequest {
   host: HostConnection;
   resolve: (response: NativeResponse) => void;
   timeout: ReturnType<typeof setTimeout>;
+  priority: NativePriority;
 }
 
 /** Holds raw inputs only while the owning document has a live, bounded request. */
@@ -89,6 +92,7 @@ export class NativeAiBroker {
       return { ok: false, reason: "cancelled" };
     }
     if (message.type !== "classify" || !validateNativeInput(message.input)) return { ok: false, reason: "invalid" };
+    if (message.priority !== undefined && !["foreground", "background", "speculative"].includes(String(message.priority))) return { ok: false, reason: "invalid" };
     let ownerCount = 0;
     for (const request of this.pending.values()) {
       if (request.owner.key !== owner.key) continue;
@@ -99,8 +103,19 @@ export class NativeAiBroker {
       this.options.reportUnavailable();
       return { ok: false, reason: "unavailable" };
     }
+    // Foreground preference is granted only to the browser-authenticated active tab.
+    const priority: NativePriority = message.priority === "speculative" ? "speculative"
+      : message.priority === "foreground" && sender.tab?.active === true ? "foreground" : "background";
+    if (priority === "foreground") {
+      for (const [id, pending] of this.pending) {
+        if (pending.priority === "speculative") {
+          if (pending.owner.key === owner.key) ownerCount--;
+          this.finish(id, { ok: false, reason: "cancelled" }, true);
+        }
+      }
+    }
+    if (priority === "speculative" && this.pending.size > 0) return { ok: false, reason: "busy" };
     if (this.pending.size >= MAX_PENDING || ownerCount >= MAX_PENDING_PER_OWNER) return { ok: false, reason: "busy" };
-
     const host = this.host;
     const input = message.input;
     const requestId = message.requestId;
@@ -108,9 +123,10 @@ export class NativeAiBroker {
     while (this.pending.has(internalId) || internalId === requestId) internalId = crypto.randomUUID();
     return new Promise<NativeResponse>((resolve) => {
       const timeout = setTimeout(() => this.finish(internalId, { ok: false, reason: "failed" }, true), REQUEST_TIMEOUT_MS);
-      this.pending.set(internalId, { requestId, owner, input, host, resolve, timeout });
+      this.pending.set(internalId, { requestId, owner, input, host, resolve, timeout, priority });
       try {
-        host.port.postMessage({ type: "classify", requestId: internalId, input });
+        host.port.postMessage({ type: "classify", requestId: internalId, input,
+          ...(message.priority !== undefined ? { priority } : {}) });
       } catch {
         this.disconnectHost(host);
       }
@@ -192,7 +208,7 @@ export function installNativeAiBroker(): void {
   });
   browser.tabs.onRemoved.addListener((tabId) => broker.invalidateTab(tabId));
   browser.storage.onChanged.addListener((changes, area) => {
-    if (area === "sync" && changes[SETTINGS_KEY]) broker.invalidateSettings();
+    if ((area === "sync" && changes[SETTINGS_KEY]) || (area === "local" && changes[MEMORY_KEY])) broker.invalidateSettings();
   });
 }
 

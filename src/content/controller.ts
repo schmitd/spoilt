@@ -2,12 +2,12 @@ import { browser } from "wxt/browser";
 import { memoryMatch, normalizeMemory } from "../core/memory";
 import { descriptionMatch, keywordMatch, normalizeWhitespace } from "../core/matching";
 import { MEMORY_KEY, STATUS_KEY } from "../core/status";
-import { NATIVE_RETRY_KEY } from "../core/native-ai-protocol";
+import { MAX_TEXT_BATCH, NATIVE_RETRY_KEY } from "../core/native-ai-protocol";
 import type { Settings, SpoilerMemory } from "../core/types";
 import { loadSettings, updateStatus } from "../platform/storage";
 import { loadMemory } from "../services/memory-service";
 import { AiClassifier } from "./ai-classifier";
-import { CandidateCollector, imageMetadata, isSpoiltNode, isVisible, Redactor, shouldSkipElement } from "./dom";
+import { CandidateCollector, imageMetadata, isSpoiltNode, isVisible, Redactor, shouldSkipElement, type TextCandidate, type ImageCandidate } from "./dom";
 
 import { LinkPrefetcher } from "./link-prefetcher";
 import { analysisSignature, precomputePage, PreparedTextApplier, type CachedAnalysis } from "./prefetch-analysis";
@@ -100,6 +100,7 @@ export class ContentController {
     while (this.#scanRequested) {
       this.#scanRequested = false;
       await this.#scanOnce();
+      if (this.#scanRequested) await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     }
   }
 
@@ -117,10 +118,11 @@ export class ContentController {
     const configuration = this.#configuration;
     const url = this.#url;
     const isCurrent = () => run === this.#run && configuration === this.#configuration && url === location.href;
-    const textCandidates = settings.scanText ? this.#collector.collectText(settings, signature) : [];
+    const textCandidates = settings.scanText ? this.#collector.collectText(settings, signature,
+      settings.useLocalAI ? Math.min(settings.maxTextNodesPerScan, MAX_TEXT_BATCH * 2) : settings.maxTextNodesPerScan) : [];
     const imageCandidates = settings.scanImages ? this.#collector.collectImages(settings, signature) : [];
-    const aiText = [];
-    const aiImages = [];
+    const aiText: TextCandidate[] = [];
+    const aiImages: ImageCandidate[] = [];
     let busy = false;
 
     for (const candidate of textCandidates) {
@@ -142,7 +144,8 @@ export class ContentController {
       counters: this.#redactor.counters,
     });
 
-    if (settings.useLocalAI && aiText.length) {
+    const analyzeText = async () => {
+      if (!settings.useLocalAI || !aiText.length) return;
       await this.#ai.text(aiText, settings, memory, (candidate, match) => {
         if (!isCurrent()) return;
         // Cache admission is optional: a valid live decision must still conceal
@@ -157,9 +160,19 @@ export class ContentController {
           busy = true;
           this.#collector.retryText(candidates, signature);
         }
+      }, (limit) => {
+        if (!isCurrent() || !settings.scanText) return [];
+        const more = this.#collector.collectText(settings, signature, limit);
+        return more.filter((candidate) => {
+          const match = this.#match(candidate.text, settings, memory);
+          if (!match) return true;
+          this.#redactor.text(candidate, match, settings.redactionStyle);
+          return false;
+        });
       });
-    }
-    if (settings.useLocalAI && settings.useVision && aiImages.length) {
+    };
+    const analyzeImages = async () => {
+      if (!settings.useLocalAI || !settings.useVision || !aiImages.length) return;
       await this.#ai.images(aiImages, settings, memory, (candidate, match) => {
         if (!isCurrent() || imageMetadata(candidate.element) !== candidate.metadataText) return;
         this.#prepared?.rememberImage(candidate.element, match);
@@ -171,11 +184,15 @@ export class ContentController {
           this.#collector.retryImages(candidates, signature);
         }
       });
-    }
+    };
+    // The host owns the fair serialized queue. Let each modality submit bounded
+    // work so image protection need not wait for every text batch on this page.
+    await Promise.all([analyzeText(), analyzeImages()]);
     if (run === this.#run) {
       if (busy) this.#scheduleBusyRetry();
       else if (aiText.length || aiImages.length) this.#resetBusyRetry();
       await updateStatus({ counters: this.#redactor.counters, pendingText: 0, pendingImages: 0 });
+      if (!busy && isCurrent() && ((settings.scanText && this.#collector.hasPendingText) || (settings.scanImages && this.#collector.hasPendingImages))) this.#scanRequested = true;
     }
   }
 
@@ -221,6 +238,7 @@ export class ContentController {
         && (mutation.type === "characterData" || mutation.type === "attributes" || [...mutation.addedNodes].some((node) => !isSpoiltNode(node)))
       ));
       if (!relevant.length) return;
+      this.#collector.enqueueRoots(relevant.flatMap((mutation) => mutation.type === "childList" ? [...mutation.addedNodes] : [mutation.target]));
       this.#redactChanges(relevant);
       this.schedule();
     });

@@ -1,5 +1,6 @@
 interface LanguageModelSession {
   prompt(input: unknown, options?: unknown): Promise<string>;
+  clone?(): Promise<LanguageModelSession>;
   destroy(): void;
 }
 

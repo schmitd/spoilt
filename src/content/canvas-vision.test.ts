@@ -57,6 +57,13 @@ async function classify(elements: Element[]) {
 }
 
 describe("canvas vision serialization", () => {
+  it("classifies every collected image beyond the former twelve-image cutoff", async () => {
+    const elements = Array.from({ length: 15 }, () => canvas(100, 100));
+    const onMatch = await classify(elements);
+    expect(imageRequests()).toHaveLength(15);
+    expect(onMatch).toHaveBeenCalledTimes(15);
+  });
+
   it("sends a collected metadata-free canvas through the host using a bounded raster copy", async () => {
     const source = canvas();
     const candidates = new CandidateCollector().collectImages(DEFAULT_SETTINGS, "canvas-scan");

@@ -11,3 +11,4 @@ a { color: #315b44; }
 .window-option { display: flex; align-items: start; gap: 8px; }
 .window-option input { margin: 5px 0 0; }
 .window-state { font-size: 14px; }
+details { margin: 20px 0; font-size: 14px; } summary { cursor: pointer; } pre { max-height: 260px; overflow: auto; font-size: 12px; }
