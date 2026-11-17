@@ -1,6 +1,6 @@
 # Spoilt
 
-Spoilt is a privacy-first Chrome extension for creating healthy boundaries around spoilers and unwanted content. It checks visible text and images against user-defined rules, then replaces matching content with tactile whiteout or marker treatments before it is read.
+Spoilt is a privacy-first Chrome extension for creating healthy boundaries around spoilers and unwanted content. It checks visible text and images against user-defined rules, then conceals matches with whiteout or marker treatments. Protection is best effort: newly loaded content may appear before analysis and some matches can be missed.
 
 ## Product Principles
 
@@ -55,6 +55,7 @@ npm test
 See [docs/TESTING.md](docs/TESTING.md) for the complete release gates.
 See [docs/RELEASE.md](docs/RELEASE.md) for the store and manual review checklist.
 See [docs/NATIVE-AI.md](docs/NATIVE-AI.md) for explicit model preparation, hardware requirements, and the analysis window lifecycle.
+See [docs/NATIVE-ACCEPTANCE.md](docs/NATIVE-ACCEPTANCE.md) for real-model acceptance and [docs/STORE.md](docs/STORE.md) for the submission worksheet.
 
 Native analysis prioritizes the viewport while continuing below the fold, shares
 duplicate snippets, and briefly reuses exact document-local decisions. Independent
@@ -77,7 +78,7 @@ WXT writes the Chrome package under `.output/`.
 
 Settings are stored in `chrome.storage.sync`. Operational status and recent spoiler knowledge are stored in `chrome.storage.local`.
 
-The optional memory feature sends queries derived from configured boundaries to Google News RSS. It does not upload page content. Disable **Keep recent knowledge up to date** to stop periodic public lookups.
+The memory feature is enabled by default and sends queries derived from boundary descriptions and keywords to Google News RSS. It does not upload browsed page content. Disable **Keep recent knowledge up to date** to stop periodic public lookups.
 
 See [PRIVACY.md](PRIVACY.md) for the complete data-use and permission disclosure.
 

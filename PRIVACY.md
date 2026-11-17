@@ -6,7 +6,7 @@ Spoilt is designed to process browsed content locally.
 
 - Boundary settings are stored in Chrome sync storage so Chrome may synchronize them between browsers signed into the same profile.
 - Operational status, concealment counters, and optional recent-spoiler knowledge are stored in Chrome local storage.
-- Spoilt does not operate a remote backend and does not sell or share user data.
+- Spoilt does not operate a remote backend or sell user data. Chrome sync and the optional web requests described below use their respective providers; page content is not uploaded to an AI service by Spoilt.
 
 ## Page Content
 
@@ -20,7 +20,7 @@ The analysis window's optional local performance details retain at most 128 nume
 
 ## Optional Recent Knowledge
 
-When **Keep recent knowledge up to date** is enabled, Spoilt sends search queries derived from enabled boundary descriptions and explicit keywords to Google News RSS. Display names are excluded. It stores a limited set of returned headlines, links, source names, dates, image references and criterion-provenance keys locally. Boundaries without criteria make no news request.
+**Keep recent knowledge up to date** is enabled by default and can be turned off in settings. While enabled, Spoilt sends search queries derived from enabled boundary descriptions and explicit keywords to Google News RSS. Google receives these queries and ordinary request metadata, such as the connection's IP address. Display names and browsed page content are excluded from these queries. Spoilt stores a limited set of returned headlines, links, source names, dates, image references and criterion-provenance keys locally. Boundaries without criteria make no news request.
 
 Stored knowledge is used only when its provenance matches the current criteria.
 Older or stale records remain stored but do not influence matching; the next
@@ -28,6 +28,10 @@ successful normal refresh rebuilds affected records from the configured criteria
 Display labels and derived display reasons are excluded from AI context.
 
 This feature can be disabled or its stored data cleared from the settings page.
+
+## Limited Use
+
+Spoilt uses data only to provide and improve its single purpose: applying the boundaries the user configures. Spoilt's use and transfer of user data adheres to the Chrome Web Store User Data Policy, including the Limited Use requirements. Spoilt does not use user data for advertising, sell it, or provide it to data brokers or credit services.
 
 ## Permissions
 

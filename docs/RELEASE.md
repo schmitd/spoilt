@@ -9,7 +9,7 @@ npm ci
 npm run test:release
 ```
 
-The release gate checks TypeScript, unit and component behavior, a production WXT build, the unpacked extension in Chromium, dependency advisories, and the final Chrome zip.
+The release gate checks TypeScript, unit and component behavior, a production WXT build, the unpacked extension in Chromium, semantic native-fixture preflight without model execution, dependency advisories, and the final Chrome zip.
 
 ## Manual Browser Checks
 
@@ -23,6 +23,11 @@ The release gate checks TypeScript, unit and component behavior, a production WX
 8. Enable recent knowledge, run a manual refresh, inspect its status, clear it, then disable it.
 
 ## Chrome Web Store
+
+Use the [submission worksheet](STORE.md) for listing copy, permission and data-use
+disclosures, reviewer instructions and publication receipts. Complete the separate
+[native acceptance](NATIVE-ACCEPTANCE.md); deterministic browser tests do not prove
+the installed profile's native model works.
 
 - Upload the zip generated under `.output/`.
 - Use the 128px icon from `public/icon/`.
