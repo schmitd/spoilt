@@ -18,8 +18,9 @@
     "test:hydration": "node tests/hydration-regression.mjs",
     "test:performance": "node tests/performance-regression.mjs",
     "test:native": "node tests/native-ai-smoke.mjs",
+    "test:native:preflight": "node tests/native-ai-smoke.mjs --preflight-only",
     "test:adversarial": "npm run build && npm run test:browser",
-    "test:release": "npm run typecheck && npm test && npm audit --audit-level=low && npm run zip",
+    "test:release": "npm run typecheck && npm test && npm run test:native:preflight && npm audit --audit-level=low && npm run zip",
     "package": "npm run zip"
   },
   "keywords": [

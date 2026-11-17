@@ -160,7 +160,7 @@ export function App() {
           <div class="section-heading">
             <div><span>4</span><div><h2 id="memory-title">Recent spoiler knowledge</h2><p>Periodically collect public headlines related to your rules.</p></div></div>
           </div>
-          <Toggle checked={draft.memoryEnabled} onChange={(memoryEnabled) => patch({ memoryEnabled })} label="Keep recent knowledge up to date" detail="Spoilt reads public search results for your subjects. Page content is never uploaded." />
+          <Toggle checked={draft.memoryEnabled} onChange={(memoryEnabled) => patch({ memoryEnabled })} label="Keep recent knowledge up to date" detail="Sends boundary descriptions and keywords to Google News for public headlines. Browsed page content is excluded." />
           {draft.memoryEnabled && (
             <details class="advanced">
               <summary>Advanced refresh limits</summary>
