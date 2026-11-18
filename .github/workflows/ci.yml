@@ -19,3 +19,25 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:release
+      - name: Record Store candidate identity
+        run: node scripts/store-package-identity.mjs
+        env:
+          SPOILT_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Save validated Store candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: spoilt-store-candidate-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            .output/spoilt-*-chrome.zip
+            .output/store-package-identity.json
+            docs/store-assets/01-keyword-protection-1280x800.png
+            docs/store-assets/02-boundary-settings-1280x800.png
+            docs/store-assets/extension-icon-128.png
+            docs/store-assets/small-promo-440x280.png
+            docs/store-assets/README.md
+            PRIVACY.md
+            docs/STORE.md
+            docs/NATIVE-ACCEPTANCE.md
