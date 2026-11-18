@@ -113,6 +113,11 @@ extension. Device/profile eligibility still applies to Chrome's model.
   audit result. Run the separate native acceptance where available.
 - Provide the 128px PNG icon and 1–5 accurate 1280x800 screenshots of the final
   build. Promotional tiles are optional. Never use private browsing screenshots.
+- CI saves an allowlisted `spoilt-store-candidate-<commit>` artifact after the
+  release gate, with the extension ZIP, public screenshots, worksheet and package
+  identity. Retrieve it through authorized GitHub access when publishing from a
+  different computer. Verify the identity, then upload only the inner extension
+  ZIP; the outer documentation/artifact archive is not a valid Store package.
 - Verify the privacy/support URLs without signing in after merging policy edits.
 - Select the actual intended publisher account/group in the dashboard. Preserve
   existing registration and payment; do not register/pay again.
