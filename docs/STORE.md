@@ -58,15 +58,12 @@ Permission justifications:
 | Permission | Justification |
 | --- | --- |
 | `storage` | Save configured boundaries and preferences in Chrome sync storage; keep operational status, optional recent knowledge and bounded positive decisions in local/session storage. |
-| `activeTab` | Let a user action in the popup request an immediate check of the current page. |
 | `alarms` | Schedule recent-knowledge refreshes when that feature is enabled and removal of expired prepared decisions. |
 | `<all_urls>` | Apply the same configured protection to ordinary websites the user visits. Read page text/image metadata, retrieve selected image pixels for local analysis, request optional Google News RSS, and support explicitly enabled link prefetching. Restricted Chrome pages remain outside content-script access. |
 
-Pre-submission permission review: `activeTab` overlaps the existing host access.
-The current manual-check path queries a tab ID and messages an already-injected
-content script; those calls alone do not require `activeTab`. Assess removing the
-redundant request before certifying minimum permissions. This worksheet records
-the currently declared manifest rather than claiming every request is necessary.
+The popup requests a check of the focused page by messaging the already-injected
+content script by tab ID. No temporary host permission is requested for this
+manual check.
 
 Remote code: **No**. Executable JavaScript and styles are packaged. Fetched RSS,
 images and HTML are data, and fetched HTML is not executed. Chrome-managed local
