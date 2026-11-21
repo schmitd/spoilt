@@ -1,6 +1,6 @@
 {
   "name": "spoilt",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "A privacy-first Chrome extension that creates healthy boundaries around spoilers and unwanted content.",
   "license": "MIT",
   "type": "module",

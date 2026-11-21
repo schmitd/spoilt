@@ -37,7 +37,6 @@ Spoilt uses data only to provide and improve its single purpose: applying the bo
 
 - `storage`: saves settings, status, and optional recent knowledge.
 - `alarms`: schedules optional recent-knowledge refreshes.
-- `activeTab`: lets the popup request an immediate check of the current page.
 - `<all_urls>`: runs protection on browsed pages and permits image retrieval for local analysis.
 
 ## Retention and Control

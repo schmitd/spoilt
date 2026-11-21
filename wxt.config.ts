@@ -9,9 +9,9 @@ export default defineConfig({
   manifest: {
     name: "Spoilt",
     description: "Create healthy boundaries around spoilers and unwanted content.",
-    version: "2.0.0",
+    version: "2.0.1",
     minimum_chrome_version: "138",
-    permissions: ["storage", "activeTab", "alarms"],
+    permissions: ["storage", "alarms"],
     host_permissions: ["<all_urls>"],
     action: {
       default_title: "Spoilt",
