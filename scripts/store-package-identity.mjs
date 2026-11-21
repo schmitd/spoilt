@@ -30,7 +30,6 @@ const walk = async directory => {
 };
 const assets = [
   ["01-keyword-protection-1280x800.png", 1280, 800],
-  ["02-boundary-settings-1280x800.png", 1280, 800],
   ["extension-icon-128.png", 128, 128],
   ["small-promo-440x280.png", 440, 280],
 ];

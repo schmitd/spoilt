@@ -1,3 +1,4 @@
+import { RECENT_NEWS_RELEASE_ENABLED } from "./release-features";
 import type { BlockingRule, RedactionStyle, Settings, Strictness } from "./types";
 
 export const SETTINGS_KEY = "spoilt.settings";
@@ -18,7 +19,7 @@ export const DEFAULT_SETTINGS: Settings = {
   scanText: true,
   scanImages: true,
   prefetchLinks: false,
-  memoryEnabled: true,
+  memoryEnabled: false,
   memoryRefreshHours: 12,
   memoryMaxEntriesPerRule: 16,
   memoryMaxImageExamplesPerRule: 8,
@@ -54,7 +55,7 @@ export function normalizeSettings(value: unknown): Settings {
     scanText: booleanValue(input.scanText, DEFAULT_SETTINGS.scanText),
     scanImages: booleanValue(input.scanImages, DEFAULT_SETTINGS.scanImages),
     prefetchLinks: booleanValue(input.prefetchLinks, DEFAULT_SETTINGS.prefetchLinks),
-    memoryEnabled: booleanValue(input.memoryEnabled, DEFAULT_SETTINGS.memoryEnabled),
+    memoryEnabled: RECENT_NEWS_RELEASE_ENABLED && input.memoryEnabled === true,
     memoryRefreshHours: clampNumber(input.memoryRefreshHours, 1, 168, 12),
     memoryMaxEntriesPerRule: clampNumber(input.memoryMaxEntriesPerRule, 4, 80, 16),
     memoryMaxImageExamplesPerRule: clampNumber(input.memoryMaxImageExamplesPerRule, 2, 40, 8),

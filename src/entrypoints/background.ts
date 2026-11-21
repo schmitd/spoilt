@@ -1,8 +1,9 @@
+import { RECENT_NEWS_RELEASE_ENABLED } from "../core/release-features";
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 import { SETTINGS_KEY } from "../core/settings";
 import { fetchImageDataUrl, clearMemory, loadMemory, refreshSpoilerMemory } from "../services/memory-service";
-import { summarizeMemory } from "../core/memory";
+import { DEFAULT_MEMORY, summarizeMemory } from "../core/memory";
 import { LeaseQueue } from "../core/lease-queue";
 import { loadSettings, loadStatus } from "../platform/storage";
 import { installNativeAiBroker } from "../platform/native-ai-broker";
@@ -53,7 +54,7 @@ export default defineBackground(() => {
       return { ok: result.cancelled };
     }
     if (message.type === "refreshMemory") return respond(() => refreshSpoilerMemory("manual"), "result");
-    if (message.type === "memoryStatus") return respond(async () => summarizeMemory(await loadMemory()), "memory");
+    if (message.type === "memoryStatus") return respond(async () => summarizeMemory(RECENT_NEWS_RELEASE_ENABLED ? await loadMemory() : { ...DEFAULT_MEMORY, enabled: false }), "memory");
     if (message.type === "clearMemory") return respond(async () => { await clearMemory(); return true; }, "result");
     if (message.type === "fetchImageDataUrl" && typeof message.url === "string") {
       return respond(() => fetchImageDataUrl(message.url as string), "result");
@@ -89,6 +90,10 @@ function clearAiLeaseTimeout(leaseId: string): void {
 }
 
 async function ensureMemoryAlarm(): Promise<void> {
+  if (!RECENT_NEWS_RELEASE_ENABLED) {
+    await browser.alarms.clear(MEMORY_ALARM);
+    return;
+  }
   const settings = await loadSettings();
   if (!settings.memoryEnabled) {
     await browser.alarms.clear(MEMORY_ALARM);

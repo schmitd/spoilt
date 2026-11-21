@@ -30,11 +30,10 @@ download of several gigabytes after you choose Prepare. Model availability and
 performance depend on Chrome, the device and the profile. Keyword and description
 matching remain available when native analysis is unavailable.
 
-Recent spoiler knowledge retrieves public headlines from Google News using your
-boundary descriptions and keywords. It is enabled by default and can be turned
-off in settings. Browsed page content is excluded from those queries. Optional
-link prefetching is off by default; enabling it can request a linked page before
-you click.
+Public-news lookups are paused in this release, including for existing profiles.
+Spoilt does not send your boundary descriptions or keywords to Google News.
+Optional link prefetching is off by default; enabling it can request a linked page
+before you click.
 
 Spoilt has no developer-operated backend and does not sell user data. Page
 analysis stays in the browser. Chrome may sync boundary settings through your
@@ -57,16 +56,15 @@ Permission justifications:
 
 | Permission | Justification |
 | --- | --- |
-| `storage` | Save configured boundaries and preferences in Chrome sync storage; keep operational status, optional recent knowledge and bounded positive decisions in local/session storage. |
-| `alarms` | Schedule recent-knowledge refreshes when that feature is enabled and removal of expired prepared decisions. |
-| `<all_urls>` | Apply the same configured protection to ordinary websites the user visits. Read page text/image metadata, retrieve selected image pixels for local analysis, request optional Google News RSS, and support explicitly enabled link prefetching. Restricted Chrome pages remain outside content-script access. |
+| `storage` | Save configured boundaries and preferences in Chrome sync storage; keep operational status, historical local references from older versions, and bounded positive decisions in local/session storage. |
+| `alarms` | Expire short-lived prefetch and live-decision records. |
+| `<all_urls>` | Apply the same configured protection to ordinary websites the user visits. Read page text/image metadata, retrieve selected image pixels for local analysis, and support explicitly enabled link prefetching. Restricted Chrome pages remain outside content-script access. |
 
 The popup requests a check of the focused page by messaging the already-injected
 content script by tab ID. No temporary host permission is requested for this
 manual check.
 
-Remote code: **No**. Executable JavaScript and styles are packaged. Fetched RSS,
-images and HTML are data, and fetched HTML is not executed. Chrome-managed local
+Remote code: **No**. Executable JavaScript and styles are packaged. Fetched images and HTML are data, and fetched HTML is not executed. Chrome-managed local
 model weights are not remote hosted executable code under Chrome's AI guidance.
 
 Disclose local processing as well as external requests. The implementation handles

@@ -8,7 +8,6 @@ Spoilt is a privacy-first Chrome extension for creating healthy boundaries aroun
 - **Boundaries without alarm:** the interface is calm, explicit, and reversible.
 - **Useful without AI:** keyword and rule-description matching always work.
 - **Progressive enhancement:** Chrome's on-device Prompt API improves semantic text and image matching when available.
-- **Transparent memory:** optional public-news lookups keep active subjects current and store the resulting references locally.
 
 Boundary names are display labels. Matching uses only the configured description,
 explicit keywords, and recent knowledge derived from those criteria. Renaming a
@@ -78,7 +77,7 @@ WXT writes the Chrome package under `.output/`.
 
 Settings are stored in `chrome.storage.sync`. Operational status and recent spoiler knowledge are stored in `chrome.storage.local`.
 
-The memory feature is enabled by default and sends queries derived from boundary descriptions and keywords to Google News RSS. It does not upload browsed page content. Disable **Keep recent knowledge up to date** to stop periodic public lookups.
+Public-news lookups are paused in this release, including for previously installed profiles. Spoilt does not send your boundary descriptions or keywords to Google News.
 
 See [PRIVACY.md](PRIVACY.md) for the complete data-use and permission disclosure.
 

@@ -9,6 +9,8 @@ import { refreshSpoilerMemory } from "./memory-service";
 const { localGet, localSet, loadSettings, updateStatus, fetchMock } = vi.hoisted(() => ({
   localGet: vi.fn(), localSet: vi.fn(), loadSettings: vi.fn(), updateStatus: vi.fn(), fetchMock: vi.fn(),
 }));
+// Keep testing the dormant query implementation with the release switch mocked on.
+vi.mock("../core/release-features", () => ({ RECENT_NEWS_RELEASE_ENABLED: true }));
 vi.mock("wxt/browser", () => ({ browser: { storage: { local: { get: localGet, set: localSet } } } }));
 vi.mock("../platform/storage", () => ({ loadSettings, updateStatus }));
 

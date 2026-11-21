@@ -1,3 +1,4 @@
+import { RECENT_NEWS_RELEASE_ENABLED } from "../../core/release-features";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { ArrowDown, ArrowUp, Copy, Plus, RotateCcw, Save, Trash2, X } from "lucide-preact";
 import { Button } from "../../components/Button";
@@ -158,10 +159,11 @@ export function App() {
 
         <section class="settings-section" aria-labelledby="memory-title">
           <div class="section-heading">
-            <div><span>4</span><div><h2 id="memory-title">Recent spoiler knowledge</h2><p>Periodically collect public headlines related to your rules.</p></div></div>
+            <div><span>4</span><div><h2 id="memory-title">Recent spoiler knowledge</h2><p>Optional public headlines related to your rules.</p></div></div>
           </div>
-          <Toggle checked={draft.memoryEnabled} onChange={(memoryEnabled) => patch({ memoryEnabled })} label="Keep recent knowledge up to date" detail="Sends boundary descriptions and keywords to Google News for public headlines. Browsed page content is excluded." />
-          {draft.memoryEnabled && (
+          {!RECENT_NEWS_RELEASE_ENABLED && <p>Google News lookups are paused in this release. Spoilt does not send your boundary descriptions or keywords to Google News.</p>}
+          {RECENT_NEWS_RELEASE_ENABLED && <Toggle checked={draft.memoryEnabled} onChange={(memoryEnabled) => patch({ memoryEnabled })} label="Keep recent knowledge up to date" detail="Sends boundary descriptions and keywords to Google News for public headlines. Browsed page content is excluded." />}
+          {RECENT_NEWS_RELEASE_ENABLED && draft.memoryEnabled && (
             <details class="advanced">
               <summary>Advanced refresh limits</summary>
               <div class="field-grid">

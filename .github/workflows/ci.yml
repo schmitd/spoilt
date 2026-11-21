@@ -34,7 +34,6 @@ jobs:
             .output/spoilt-*-chrome.zip
             .output/store-package-identity.json
             docs/store-assets/01-keyword-protection-1280x800.png
-            docs/store-assets/02-boundary-settings-1280x800.png
             docs/store-assets/extension-icon-128.png
             docs/store-assets/small-promo-440x280.png
             docs/store-assets/README.md
