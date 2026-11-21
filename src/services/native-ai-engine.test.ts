@@ -184,6 +184,7 @@ describe("independent sessions from a pristine baseline", () => {
   it.each(["settings", "memory"])("replaces a baseline after %s changes", async (changed) => {
     const { model, baselines } = cloneableModel();
     const engine = new NativeAiEngine();
+    if (changed === "memory") loadSettings.mockResolvedValue({ ...DEFAULT_SETTINGS, memoryEnabled: true });
     await engine.classify(input, new AbortController().signal);
     if (changed === "settings") loadSettings.mockResolvedValue({ ...DEFAULT_SETTINGS, strictness: "strict" });
     else loadMemory.mockResolvedValue(criterionMemory(DEFAULT_SETTINGS.rules[0]!));
@@ -526,9 +527,19 @@ describe("filter names are display metadata", () => {
     engine.close();
   });
 
+  it("does not read or supply stored news in the default release configuration", async () => {
+    const { model } = mockModel();
+    loadMemory.mockResolvedValue(criterionMemory(DEFAULT_SETTINGS.rules[0]!));
+    const engine = new NativeAiEngine();
+    expect(await engine.classify(input, new AbortController().signal)).toMatchObject({ ok: true });
+    expect(loadMemory).not.toHaveBeenCalled();
+    expect(JSON.stringify(model.create.mock.calls[0])).not.toContain("Actual lunar mission outcome");
+    engine.close();
+  });
+
   it("does not invalidate model context for stored memory labels or reporting timestamps", async () => {
     const original = { ...DEFAULT_SETTINGS.rules[0]!, name: "Private memory label A" };
-    let settings = { ...DEFAULT_SETTINGS, rules: [original] };
+    let settings = { ...DEFAULT_SETTINGS, memoryEnabled: true, rules: [original] };
     loadSettings.mockImplementation(async () => settings);
     loadMemory.mockResolvedValue(criterionMemory(original));
     const { model, baselines, clones } = cloneableModel('{"decisions":[{"i":0,"block":true,"rule":"boundary-1"}]}');
