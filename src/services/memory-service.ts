@@ -1,3 +1,4 @@
+import { RECENT_NEWS_RELEASE_ENABLED } from "../core/release-features";
 import { browser } from "wxt/browser";
 import {
   buildGoogleNewsRssUrl,
@@ -17,11 +18,13 @@ const FETCH_TIMEOUT_MS = 12_000;
 const MAX_IMAGE_BYTES = 1_500_000;
 
 export async function loadMemory(): Promise<SpoilerMemory> {
+  if (!RECENT_NEWS_RELEASE_ENABLED) return { ...DEFAULT_MEMORY, enabled: false };
   const result = await browser.storage.local.get(MEMORY_KEY);
   return normalizeMemory(result[MEMORY_KEY] as Partial<SpoilerMemory> | undefined);
 }
 
 export async function refreshSpoilerMemory(reason: "manual" | "alarm"): Promise<MemorySummary> {
+  if (!RECENT_NEWS_RELEASE_ENABLED) return summarizeMemory({ ...DEFAULT_MEMORY, enabled: false });
   const settings = await loadSettings();
   if (!settings.memoryEnabled) return summarizeMemory({ ...await loadMemory(), enabled: false });
   const current = await loadMemory();
@@ -36,7 +39,7 @@ export async function refreshSpoilerMemory(reason: "manual" | "alarm"): Promise<
     const query = buildRuleSearchQuery(rule);
     if (!query) continue;
     try {
-      const response = await fetchWithTimeout(buildGoogleNewsRssUrl(rule), { credentials: "omit", cache: "no-store" });
+      const response = await fetchWithTimeout(buildGoogleNewsRssUrl(rule), { credentials: "omit", cache: "no-store", redirect: "error" });
       if (!response.ok) throw new Error(`Public search returned ${response.status}.`);
       const extracted = extractRssItems(await response.text(), rule, discoveredAt);
       const criteriaKey = ruleCriteriaKey(rule);

@@ -8,10 +8,12 @@ Upload screenshots:
 
 1. `01-keyword-protection-1280x800.png`: actual direct matching conceals three text
    fragments and one image in a fictional feed. Safe content stays visible.
-2. `02-boundary-settings-1280x800.png`: actual boundary editor and Google News
-   query disclosure, at a normal scroll position.
 
-Both screenshots are 1280x800 RGB PNGs. `extension-icon-128.png` is the exact
+The old `02-boundary-settings-1280x800.png` remains historical only. It shows
+the retired default-on Google News UI, so the release artifact does not include
+it. Replace it only with a real capture from the final Windows-verified build.
+
+The release screenshot is a 1280x800 RGB PNG. `extension-icon-128.png` is the exact
 existing 128px icon. `small-promo-440x280.png` is an optional promotional tile.
 
 The captures used explicit keyword matching with native analysis, recent

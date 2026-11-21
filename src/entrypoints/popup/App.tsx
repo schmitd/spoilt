@@ -1,3 +1,4 @@
+import { RECENT_NEWS_RELEASE_ENABLED } from "../../core/release-features";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { BookOpen, Brain, ExternalLink, RefreshCw, ScanSearch, ShieldCheck, Sparkles } from "lucide-preact";
 import { browser } from "wxt/browser";
@@ -100,10 +101,10 @@ export function App() {
           if (!response.ok) throw new Error(response.error);
           if (response.status) setStatus(response.status);
         })}>Check this page</Button>
-        <Button icon={<RefreshCw size={18} />} loading={busy === "refresh"} onClick={() => void run("refresh", async () => {
+        {RECENT_NEWS_RELEASE_ENABLED && settings.memoryEnabled && <Button icon={<RefreshCw size={18} />} loading={busy === "refresh"} onClick={() => void run("refresh", async () => {
           const memory = await refreshMemory();
           setStatus((current) => ({ ...current, memory }));
-        })}>Update recent knowledge</Button>
+        })}>Update recent knowledge</Button>}
       </div>
 
       <details class="diagnostics">
@@ -111,7 +112,7 @@ export function App() {
         <dl>
           <div><dt><Brain size={15} /> Text analysis</dt><dd>{friendlyModelState(status.aiText)}</dd></div>
           <div><dt><Sparkles size={15} /> Image analysis</dt><dd>{friendlyModelState(status.aiVision)}</dd></div>
-          <div><dt><BookOpen size={15} /> Recent knowledge</dt><dd>{status.memory.entryCount + status.memory.imageExampleCount} references</dd></div>
+          {RECENT_NEWS_RELEASE_ENABLED && settings.memoryEnabled && <div><dt><BookOpen size={15} /> Recent knowledge</dt><dd>{status.memory.entryCount + status.memory.imageExampleCount} references</dd></div>}
         </dl>
         {status.aiReason && <p>{status.aiReason}</p>}
         <Button tone="quiet" icon={<Brain size={17} />} loading={busy === "prepare"} onClick={() => void run("prepare", async () => {

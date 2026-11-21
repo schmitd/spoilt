@@ -1,3 +1,4 @@
+import { RECENT_NEWS_RELEASE_ENABLED } from "../core/release-features";
 import { browser } from "wxt/browser";
 import { matchingMemorySignature, memoryMatch, normalizeMemory } from "../core/memory";
 import { descriptionMatch, keywordMatch, normalizeWhitespace } from "../core/matching";
@@ -52,7 +53,7 @@ export class ContentController {
         }
         return;
       }
-      if (!((area === "sync" && changes["spoilt.settings"]) || (area === "local" && changes[MEMORY_KEY]))) return;
+      if (!((area === "sync" && changes["spoilt.settings"]) || (RECENT_NEWS_RELEASE_ENABLED && area === "local" && changes[MEMORY_KEY]))) return;
       if (this.#starting) this.#configurationChanged = true;
       else void this.#reloadSettings({
         ...(area === "sync" ? { settings: normalizeSettings(changes["spoilt.settings"]?.newValue) } : {}),
